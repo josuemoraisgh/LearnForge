@@ -1,0 +1,102 @@
+[
+    {
+        "id": 1,
+        "tipo": 1,
+        "dificuldade": "média",
+        "enunciado": "Em sistemas de monitoramento térmico, a escolha do sensor adequado depende de fatores como precisão, necessidade de calibração, princípio de funcionamento e compatibilidade com circuitos eletrônicos. Considerando um cenário em que se deseja medir temperatura sem necessidade de calibração prévia, com resposta rápida, sem depender da variação resistiva e utilizando eletrônica apropriada, qual dos sensores abaixo atende a essas exigências?",
+        "imagem": "assests/pressao_hidrostática0.png",
+        "alternativas": [
+            "Um termistor PTC, cuja resistência aumenta com a temperatura, exigindo circuitos de calibração para evitar erros em faixas mais amplas.",
+            "Uma RTD (termoresistência), que apresenta alta precisão, mas requer excitação elétrica e calibração prévia para funcionamento adequado.",
+            "Um cristal piezoelétrico, que converte pressão mecânica em sinais elétricos, sendo mais indicado para medições dinâmicas do que térmicas.",
+            "Um termistor NTC, cuja resistência diminui com o aumento da temperatura, exigindo compensações eletrônicas para leituras lineares."
+        ],
+        "correta": "Um termopar, formado por dois metais distintos, que gera uma força eletromotriz proporcional à diferença de temperatura entre suas junções.",
+        "obs": [
+            "Este é um exempo de observação",
+            "Veja como são as coisas"
+        ]
+    },
+    {
+        "id": 2,
+        "tipo": 2,
+        "dificuldade": "média",
+        "enunciado": "A medida de profundidade em ambientes aquáticos está relacionada à pressão hidrostática, através da relação aproximadamente linear P = f(z), em que z é a profundidade e P é a pressão. Assuma que a densidade da água do mar ρ = 1,025 x 103 kg.m-3, que não há variação dessa densidade com a profundidade e que o valor da aceleração da gravidade é g = 9,8 m/s2. Nesse contexto, assinale a opção cujo gráfico relaciona adequadamente a profundidade com a pressão hidrostática:",
+        "imagem": "assests/pressao_hidrostática0.png",
+        "alternativas": [
+            "assests/pressao_hidrostática2.png",
+            "assests/pressao_hidrostática3.png",
+            "assests/pressao_hidrostática4.png",
+            "Nenhuma das anteriores."
+        ],
+        "correta": "assests/pressao_hidrostática1.png",
+        "obs": [
+            "Este é um exempo de observação",
+            "Veja como são as coisas"
+        ]
+    },
+    {
+        "id": 3,
+        "tipo": 3,
+        "dificuldade": "média",
+        "enunciado": "Um sensor RTD de platina apresenta resistência nominal de <R0>Ω a 0 °C. Sabendo que a resistência medida foi de <RM>Ω e que o coeficiente de temperatura do sensor é <ALPHA> 1/°C, calcule a temperatura do sensor considerando a equação:\n\nRF = RI × (1 + α × ΔT)\n\nQual é o valor de ΔT (temperatura atual)?",
+        "imagem": "assests/pressao_hidrostática0.png",
+        "variaveis": {
+            "R0": {
+                "min": 90,
+                "max": 110,
+                "step": 1
+            },
+            "ALPHA": {
+                "min": 0.0037,
+                "max": 0.0041,
+                "step": 0.0001
+            },
+            "RM": {
+                "min": 0,
+                "max": 200,
+                "step": 1
+            }
+        },
+        "resolucoes": {
+            "TEMP": "(RM - R0) / (R0 * ALPHA)"
+        },
+        "alternativas": [
+            "O valor correto é <TEMP + 1>",
+            "O valor correto é <TEMP / 1.5>",
+            "O valor correto é <TEMP - 2.5>",
+            "O valor correto é <TEMP * 0.5>"
+        ],
+        "correta": "O valor correto é <TEMP>",
+        "obs": [
+            "Este é um exempo de observação",
+            "Veja como são as coisas"
+        ]
+    },
+    {
+        "id": 4,
+        "tipo": 4,
+        "dificuldade": "média",
+        "enunciado": "Durante uma análise de desempenho de um sistema de ventilação industrial, o engenheiro responsável precisa compreender as diferentes naturezas da pressão envolvida no escoamento do ar. Com base nos conceitos de pressão estática, pressão diferencial e pressão dinâmica, assinale a alternativa que apresenta apenas afirmações corretas.",
+        "imagem": "assests/pressao_hidrostática0.png",
+        "afirmacoes": {
+            "I": "A pressão dinâmica é exercida por um fluido em movimento e pode ser medida com uma tomada de impulso voltada contra o escoamento.",
+            "II": "A pressão estática corresponde à força que o fluido exerce em repouso, sendo medida por uma tomada perpendicular ao fluxo.",
+            "III": "A pressão diferencial é representada pela variação ΔP entre dois pontos distintos de um sistema.",
+            "IV": "A pressão estática é medida diretamente na linha de impacto do fluido em movimento, o que garante máxima precisão.",
+            "V": "A pressão dinâmica é frequentemente utilizada para medir vazão em tubos através de tubos de Pitot.",
+            "VI": "A pressão diferencial só é aplicável em fluidos compressíveis, como gases industriais pressurizados."
+        },
+        "alternativas": [
+            "Apenas I, II e III estão corretas.",
+            "Apenas II, III e IV estão corretas.",
+            "Apenas I, IV e VI estão corretas.",
+            "Apenas II, V e VI estão corretas."
+        ],
+        "correta": "Apenas I, III e V estão corretas.",
+        "obs": [
+            "Este é um exempo de observação",
+            "Veja como são as coisas"
+        ]
+    }
+]
