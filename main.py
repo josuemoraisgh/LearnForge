@@ -1,3 +1,5 @@
+# main.py
+# -*- coding: utf-8 -*-
 """
 GUI responsiva (Tk + ttk) para gerar Beamer a partir de um JSON,
 chamando diretamente a função json2beamer.json2beamer(...) do arquivo json2beamer.py.
@@ -12,14 +14,14 @@ Preferências salvas em ~/.json2beamer_gui.ini
 """
 
 import io
+import shutil
+import subprocess
 import json
 import os
 import sys
 import threading
 import configparser
 from pathlib import Path
-import subprocess
-import shutil
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
@@ -233,9 +235,6 @@ class App(ttk.Frame):
         ttk.Button(actions, text="Gerar PDF", command=self.on_run_pdf, style="Accent.TButton").grid(row=0, column=1, padx=8, sticky="w")
         ttk.Button(actions, text="Salvar Preferências", command=self.on_save).grid(row=0, column=2, padx=8, sticky="w")
 
-        # --- NEW: botão para abrir o editor de questões ---
-        ttk.Button(actions, text="Revisar/Editar Questões…", command=self.open_editor).grid(row=0, column=3, padx=8, sticky="w")
-
     # ====== UI Bottom (log) ======
     def _build_bottom(self):
         ttk.Label(self.bottom, text="Log").grid(row=0, column=0, sticky="w")
@@ -423,83 +422,6 @@ class App(ttk.Frame):
         )
         t.start()
         
-    def on_run_pdf(self):
-        if not self.validate_inputs():
-            return
-        import shutil
-        if shutil.which("pdflatex") is None:
-            messagebox.showerror(APP_NAME, "pdflatex não encontrado no PATH. Verifique a instalação do LaTeX.")
-            return
-        json_in = self.var_json.get().strip()
-        out_tex = self.var_output.get().strip()
-        title = self.var_title.get().strip() or DEFAULTS["title"]
-        fsq = self.var_fsq.get().strip() or DEFAULTS["fsq"]
-        fsa = self.var_fsa.get().strip() or DEFAULTS["fsa"]
-        alert = self.var_alert.get().strip() or DEFAULTS["alert_color"]
-        seed = self.var_seed.get().strip() or None
-        self.var_status.set("Gerando .tex e compilando PDF…")
-        self.log(f"Iniciando geração e compilação para: {json_in}")
-        t = threading.Thread(
-            target=self._run_json2beamer_and_pdflatex,
-            args=(json_in, out_tex, seed, title, fsq, fsa, alert),
-            daemon=True
-        )
-        t.start()
-
-    def _run_json2beamer_and_pdflatex(self, json_in, out_tex, seed, title, fsq, fsa, alert):
-        import io, sys, subprocess
-        old_stdout = sys.stdout
-        buf = io.StringIO()
-        sys.stdout = buf
-        try:
-            rc = json2beamer.json2beamer(
-                input_json=json_in,
-                output_tex=out_tex,
-                shuffle_seed=seed,
-                title=title,
-                fsq=fsq,
-                fsa=fsa,
-                alert_color=alert
-            )
-        except Exception as e:
-            sys.stdout = old_stdout
-            self.var_status.set("Erro.")
-            self.log(f"❌ Erro gerando .tex: {e}")
-            return
-        sys.stdout = old_stdout
-        out_text = buf.getvalue().strip()
-        if out_text:
-            self.log(out_text)
-        if rc != 0:
-            self.var_status.set("Falhou ao gerar .tex (veja o log).")
-            self.log(f"❌ Retorno: {rc}")
-            return
-        self.log(f"✅ .tex gerado: {out_tex}")
-        try:
-            tex_path = Path(out_tex).resolve()
-            workdir = tex_path.parent
-            pdf_name = tex_path.with_suffix(".pdf").name
-            cmd = ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
-            for i in range(2):
-                self.log(f"Compilando (passagem {i+1}/2)…")
-                proc = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True)
-                if proc.stdout:
-                    self.log(proc.stdout.strip())
-                if proc.returncode != 0:
-                    if proc.stderr:
-                        self.log(proc.stderr.strip())
-                    raise RuntimeError(f"pdflatex retornou código {proc.returncode}")
-            pdf_path = workdir / pdf_name
-            if pdf_path.exists():
-                self.var_status.set("PDF gerado com sucesso.")
-                self.log(f"✅ PDF gerado em: {pdf_path}")
-            else:
-                self.var_status.set("Compilação terminou, mas o PDF não foi localizado.")
-                self.log("⚠️ pdflatex executou, mas o arquivo .pdf não foi encontrado.")
-        except Exception as e:
-            self.var_status.set("Erro na compilação do PDF.")
-            self.log(f"❌ Erro no pdflatex: {e}")
-
     def on_save(self):
         """Salva preferências do formulário no ~/.json2beamer_gui.ini."""
         values = {
@@ -543,21 +465,91 @@ class App(ttk.Frame):
         else:
             self.var_status.set("Falhou (veja o log).")
             self.log(f"❌ Retorno: {rc}")
+    def on_run_pdf(self):
+        if not self.validate_inputs():
+            return
+        if shutil.which("pdflatex") is None:
+            messagebox.showerror(APP_NAME, "pdflatex não encontrado no PATH. Verifique a instalação do LaTeX.")
+            return
+        json_in = self.var_json.get().strip()
+        out = self.var_output.get().strip()
+        title = self.var_title.get().strip() or DEFAULTS["title"]
+        fsq = self.var_fsq.get().strip() or DEFAULTS["fsq"]
+        fsa = self.var_fsa.get().strip() or DEFAULTS["fsa"]
+        alert = self.var_alert.get().strip() or DEFAULTS["alert_color"]
+        seed = self.var_seed.get().strip() or None
+        self.var_status.set("Gerando .tex e compilando PDF…")
+        self.log(f"Iniciando geração e compilação para: {json_in}")
+        t = threading.Thread(
+            target=self._run_json2beamer_and_pdflatex,
+            args=(json_in, out, seed, title, fsq, fsa, alert),
+            daemon=True
+        )
+        t.start()
 
-    # --- NEW: handler do botão de edição ---
-    def open_editor(self):
-        path = self.var_json.get().strip()
-        if not path:
-            messagebox.showwarning(APP_NAME, "Selecione primeiro o arquivo JSON de questões.")
-            return
-        if not Path(path).exists():
-            messagebox.showerror(APP_NAME, "O arquivo JSON indicado não existe.")
-            return
+    def _run_json2beamer_and_pdflatex(self, json_in, out, seed, title, fsq, fsa, alert):
+        old_stdout = sys.stdout
+        buf = io.StringIO()
+        sys.stdout = buf
         try:
-            import question_editor
-            question_editor.QuestionEditor(self.master, path, on_saved=lambda: self.log("JSON atualizado pelo editor."))
+            rc = json2beamer.json2beamer(
+                input_json=json_in,
+                output_tex=out,
+                shuffle_seed=seed,
+                title=title,
+                fsq=fsq,
+                fsa=fsa,
+                alert_color=alert
+            )
         except Exception as e:
-            messagebox.showerror(APP_NAME, f"Não foi possível abrir o editor:\n{e}")
+            sys.stdout = old_stdout
+            self.var_status.set("Erro.")
+            self.log(f"❌ Erro gerando .tex: {e}")
+            return
+        sys.stdout = old_stdout
+        out_text = buf.getvalue().strip()
+        if out_text:
+            self.log(out_text)
+        if rc != 0:
+            self.var_status.set("Falhou ao gerar .tex (veja o log).")
+            self.log(f"❌ Retorno: {rc}")
+            return
+        self.log(f"✅ .tex gerado: {out}")
+        try:
+            tex_path = Path(out).resolve()
+            workdir = tex_path.parent
+            pdf_name = tex_path.with_suffix(".pdf").name
+            cmd = ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
+            for i in range(2):
+                self.log(f"Compilando (passagem {i+1}/2)…")
+                proc = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True)
+                if proc.stdout:
+                    self.log(proc.stdout.strip())
+                if proc.returncode != 0:
+                    if proc.stderr:
+                        self.log(proc.stderr.strip())
+                    raise RuntimeError(f"pdflatex retornou código {proc.returncode}")
+            pdf_path = workdir / pdf_name
+            if pdf_path.exists():
+                self.var_status.set("PDF gerado com sucesso.")
+                self.log(f"✅ PDF gerado em: {pdf_path}")
+                # abrir automaticamente
+                try:
+                    if os.name == "nt":
+                        os.startfile(str(pdf_path))
+                    else:
+                        opener = "open" if sys.platform == "darwin" else "xdg-open"
+                        subprocess.Popen([opener, str(pdf_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.log("📂 PDF aberto no visualizador padrão.")
+                except Exception as e:
+                    self.log(f"⚠️ Não foi possível abrir automaticamente o PDF: {e}")
+            else:
+                self.var_status.set("Compilação terminou, mas o PDF não foi localizado.")
+                self.log("⚠️ pdflatex executou, mas o arquivo .pdf não foi encontrado.")
+        except Exception as e:
+            self.var_status.set("Erro na compilação do PDF.")
+            self.log(f"❌ Erro no pdflatex: {e}")
+
 
 def main():
     root = tk.Tk()
