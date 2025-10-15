@@ -232,10 +232,25 @@ class App(ttk.Frame):
         actions.grid(row=3, column=0, sticky="ew")
         actions.columnconfigure(0, weight=1)
         ttk.Button(actions, text="Gerar .tex", command=self.on_run, style="Accent.TButton").grid(row=0, column=0, sticky="w")
-        ttk.Button(actions, text="Gerar PDF", command=self.on_run_pdf, style="Accent.TButton").grid(row=0, column=1, padx=8, sticky="w")
-        ttk.Button(actions, text="Salvar Preferências", command=self.on_save).grid(row=0, column=2, padx=8, sticky="w")
+        ttk.Button(actions, text="Gerar PDF", command=self.on_run_pdf, style="Accent.TButton").grid(row=0, column=0, padx=104, sticky="w")
+        ttk.Button(actions, text="Salvar Preferências", command=self.on_save).grid(row=0, column=1, padx=8, sticky="w")
+        ttk.Button(actions, text="Revisar/Editar Questões…", command=self.open_editor).grid(row=0, column=2, padx=8, sticky="w")        
 
     # ====== UI Bottom (log) ======
+    def open_editor(self):
+        path = self.var_json.get().strip()
+        if not path:
+            messagebox.showwarning(APP_NAME, "Selecione primeiro o arquivo JSON de questões.")
+            return
+        if not Path(path).exists():
+            messagebox.showerror(APP_NAME, "O arquivo JSON indicado não existe.")
+            return
+        try:
+            import question_editor
+            question_editor.QuestionEditor(self.master, path, on_saved=lambda: self.log("JSON atualizado pelo editor."))
+        except Exception as e:
+            messagebox.showerror(APP_NAME, f"Não foi possível abrir o editor:\n{e}")
+                
     def _build_bottom(self):
         ttk.Label(self.bottom, text="Log").grid(row=0, column=0, sticky="w")
 
