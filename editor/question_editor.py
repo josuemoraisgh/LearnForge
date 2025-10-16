@@ -11,7 +11,7 @@ from copy import deepcopy
 
 from .kv_table import KVTable
 from .safe_eval import SafeEval, safe_eval
-from .question_utils import ensure_lists, tipo_of
+from editor.question_utils import ensure_lists, tipo_of
 
 APP_TITLE = "Editor de Questões (JSON)"
 ALPH = "abcdefghijklmnopqrstuvwxyz"

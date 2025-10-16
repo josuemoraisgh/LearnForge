@@ -29,23 +29,9 @@ except Exception:
 
 from config.preferences import APP_NAME, get_ini_path, FONT_SIZES, DEFAULTS, load_prefs, save_prefs
 from beamer.generator import jsons_to_tex
+from testgen.generator import jsons_to_docx
+from editor.question_editor import QuestionEditor
 from gui.scrollable_frame import ScrollableFrame
-
-def _import_gerar_prova():
-    try:
-        from test.gerar_prova_template import gerar_prova_template  # type: ignore
-        return gerar_prova_template
-    except Exception:
-        pass
-    here = Path(__file__).resolve()
-    candidate = (here.parent.parent / "gerar_prova_template.py")
-    if candidate.exists():
-        spec = importlib.util.spec_from_file_location("gerar_prova_template", str(candidate))
-        mod = importlib.util.module_from_spec(spec)
-        assert spec and spec.loader
-        spec.loader.exec_module(mod)  # type: ignore
-        return getattr(mod, "gerar_prova_template")
-    raise ImportError("Não foi possível importar gerar_prova_template.py")
 
 TREE_HEIGHT_ROWS = 3
 
@@ -683,18 +669,12 @@ class App(ttk.Frame):
         seed_s = self.var_seed_test.get().strip()
         seed = int(seed_s) if seed_s.isdigit() else None
 
-        try:
-            gerar_prova_template = _import_gerar_prova()
-        except Exception as e:
-            messagebox.showerror("Prova", f"Erro importando gerar_prova_template.py:\n{e}")
-            return
-
         jsons = self._get_json_paths()
         self.var_status.set("Gerando prova .docx…")
         self.log(f"Prova: template={template}, questões={total}, placeholder={placeholder}")
         def _job():
             try:
-                gerar_prova_template(template, jsons, out_docx, num=total, seed=seed, placeholder=placeholder)
+                jsons_to_docx(template, jsons, out_docx, num=total, seed=seed, placeholder=placeholder)
                 self.var_status.set("Prova gerada com sucesso.")
                 self.log(f"✅ Prova gerada em: {out_docx}")
                 self._open_folder(str(Path(out_docx).resolve().parent))
@@ -703,28 +683,6 @@ class App(ttk.Frame):
                 self.log(f"❌ Erro gerando prova: {e}")
                 messagebox.showerror("Prova", f"Erro gerando prova:\n{e}")
         threading.Thread(target=_job, daemon=True).start()
-
-    def _get_question_editor_class(self):
-        try:
-            from json2beamer_app.editor.question_editor import QuestionEditor  # type: ignore
-            return QuestionEditor
-        except Exception:
-            pass
-        try:
-            from editor.question_editor import QuestionEditor  # type: ignore
-            return QuestionEditor
-        except Exception:
-            pass
-        here = Path(__file__).resolve()
-        candidate = (here.parent.parent / "editor" / "question_editor.py")
-        if candidate.exists():
-            spec = importlib.util.spec_from_file_location("question_editor", str(candidate))
-            mod = importlib.util.module_from_spec(spec)
-            assert spec and spec.loader
-            spec.loader.exec_module(mod)  # type: ignore
-            if hasattr(mod, "QuestionEditor"):
-                return getattr(mod, "QuestionEditor")
-        raise ImportError("Não foi possível localizar QuestionEditor.")
 
     def open_editor(self):
         sel = self.tbl.selection()
@@ -736,7 +694,6 @@ class App(ttk.Frame):
             messagebox.showerror("Editor", "O arquivo JSON indicado não existe.")
             return
         try:
-            QuestionEditor = self._get_question_editor_class()
             QuestionEditor(self.master, path, on_saved=lambda: self.log("JSON atualizado pelo editor."))
         except Exception as e:
             messagebox.showerror("Editor", f"Não foi possível abrir o editor:\n{e}")
