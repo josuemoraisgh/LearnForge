@@ -32,9 +32,8 @@ jobs:
       ENTRYPOINT: main.py
       PYTHON_VERSION: '3.12'
       DIST_DIR: dist
-      BUILD_DIR: build
       TEX_OUTDIR: tex
-      # pastas empacotadas (SRC;DEST) — uma por linha
+      # pastas empacotadas no executável (SRC;DEST) — uma por linha
       ADD_DATA_DIRS: >
         assets;assets
         beamer;beamer
@@ -112,74 +111,31 @@ jobs:
             $datas `
             "$entry"
 
-      # ---------- MiKTeX Portable (pdflatex embutido) ----------
-      - name: Install Chocolatey (for MiKTeX Portable)
+      # ---------- Tectonic (LaTeX engine portátil) ----------
+      - name: Install Chocolatey (for Tectonic)
         shell: pwsh
         run: |
           Set-ExecutionPolicy Bypass -Scope Process -Force
           [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
           Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
-      - name: Install MiKTeX Portable
+      - name: Install Tectonic
         shell: pwsh
         run: |
-          choco install miktex.portable --yes --no-progress
-          $mikRoot = (Get-ChildItem 'C:\ProgramData\chocolatey\lib\miktex.portable\tools' -Directory | Select-Object -First 1).FullName
-          echo "MIK_ROOT=$mikRoot" >> $env:GITHUB_ENV
+          choco install tectonic --yes --no-progress
+          $tect = (Get-ChildItem 'C:\ProgramData\chocolatey\bin\tectonic.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $tect) { throw "tectonic.exe not found by choco." }
+          echo "TECTONIC_BIN=$tect" >> $env:GITHUB_ENV
 
-      - name: Preinstall LaTeX packages (beamer stack)
-        shell: pwsh
-        run: |
-          $mikRoot = "${{ env.MIK_ROOT }}"
-          if (-not (Test-Path $mikRoot)) { throw "MiKTeX portable not found." }
-
-          # Ajuste de bin path (x64 em runners atuais)
-          $bin = Join-Path $mikRoot 'miktex\bin'
-          $bin64 = Join-Path $mikRoot 'miktex\bin\x64'
-          if (Test-Path $bin64) { $bin = $bin64 }
-
-          $mpm = Join-Path $bin 'mpm.exe'
-          $pkgs = @(
-            'beamer',
-            'amsmath','amsfonts','amsthm',
-            'bookmark','hyperref',
-            'graphics','graphicx','xcolor',
-            'enumitem','newunicodechar',
-            'translator',
-            'geometry',
-            'epstopdf-pkg',
-            'sansmathaccent',
-            'koma-script'
-          )
-          & $mpm --verbose --update-db
-          foreach ($p in $pkgs) {
-            & $mpm --verbose --install=$p
-          }
-
-          # Teste: compila um arquivo mínimo para garantir pdflatex ok
-          $tmp = Join-Path $env:RUNNER_TEMP 'min.tex'
-          @"
-\documentclass{beamer}
-\usepackage[utf8]{inputenc}
-\usepackage{graphicx}
-\usepackage{amsmath,amssymb}
-\usepackage{enumitem}
-\usepackage{newunicodechar}
-\begin{document}\begin{frame}Hello, pdflatex!\end{frame}\end{document}
-"@ | Out-File -FilePath $tmp -Encoding utf8
-
-          $pdflatex = Join-Path $bin 'pdflatex.exe'
-          & $pdflatex -interaction=nonstopmode -halt-on-error $tmp
-
-          echo "MIK_BIN=$bin" >> $env:GITHUB_ENV
-
-      - name: Prepare bundle (EXE + portable TeX)
+      - name: Prepare bundle (EXE + tectonic)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bundle | Out-Null
           Copy-Item -Path (Join-Path "${{ env.DIST_DIR }}" "${{ env.APP_NAME }}.exe") -Destination bundle/
-          # Copia MiKTeX Portable para bundle/tex
-          Copy-Item -Recurse -Force -Path "${{ env.MIK_ROOT }}" -Destination (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}')
+
+          # Copia tectonic.exe para bundle/tex/
+          New-Item -ItemType Directory -Force -Path (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}') | Out-Null
+          Copy-Item -Path "${{ env.TECTONIC_BIN }}" -Destination (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}')
 
       - name: Create ZIP
         shell: pwsh
