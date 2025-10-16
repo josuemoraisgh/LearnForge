@@ -32,7 +32,7 @@ class Type2Builder(QuestionTypeBuilder):
             prompt=prompt,
             choices=choices,
             solution=sol,
-            metadata=raw.get("meta", {})
+            metadata={ **(raw.get("meta") or {}), "obs": raw.get("obs", []) }
         )
 
     def _parse_bool(self, v):

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Janela principal com abas (Quiz / Test).
-- A aba **Quiz** contém: "Saída", "Opções" e os botões "Gerar .tex" e "Gerar PDF".
+Janela principal com abas (Beamer / Test).
+- A aba **Beamer** contém: "Saída", "Opções" e os botões "Gerar .tex" e "Gerar PDF".
 - A aba **Test** (prova) integra gerar_prova_template.py para gerar um .docx:
   Template (.docx), Nº de questões, Placeholder do template e Saída .docx.
 - O botão **Salvar Preferências** aparece nas duas abas.
@@ -28,7 +28,7 @@ except Exception:
     _HAS_DND = False
 
 from config.preferences import APP_NAME, get_ini_path, FONT_SIZES, DEFAULTS, load_prefs, save_prefs
-from beamer.generator import jsons_to_tex
+from beamer.generator import json2beamer
 from testgen.generator import jsons_to_docx
 from editor.question_editor import QuestionEditor
 from gui.scrollable_frame import ScrollableFrame
@@ -81,7 +81,7 @@ class App(ttk.Frame):
         self.var_status = tk.StringVar(value=f"Pronto. Config: {get_ini_path()}")
 
         # Prova (Test) vars
-        self.var_template = tk.StringVar(value="template_prova.docx")
+        self.var_template = tk.StringVar(value="assets/template_prova.docx")
         self.var_total_q = tk.IntVar(value=10)
         self.var_placeholder = tk.StringVar(value="{{QUESTOES}}")
         self.var_seed_test = tk.StringVar(value="")
@@ -149,7 +149,7 @@ class App(ttk.Frame):
 
         # --- TAB QUIZ ---
         self.tab_quiz = ttk.Frame(nb, padding=6)
-        nb.add(self.tab_quiz, text="Quiz")
+        nb.add(self.tab_quiz, text="Beamer")
 
         out = ttk.LabelFrame(self.tab_quiz, text="Saída", padding=8)
         out.grid(row=0, column=0, sticky="ew", pady=(0,10))
@@ -491,7 +491,8 @@ class App(ttk.Frame):
         fsq = self.var_fsq.get().strip() or DEFAULTS["fsq"]
         fsa = self.var_fsa.get().strip() or DEFAULTS["fsa"]
         alert = self.var_alert.get().strip() or DEFAULTS["alert_color"]
-        seed = self.var_seed.get().strip() or None
+        seed_s = self.var_seed.get().strip()
+        seed = int(seed_s) if seed_s.isdigit() else None
         self.var_status.set("Gerando .tex…")
         self.log(f"Iniciando geração para {len(paths)} JSON(s).")
 
@@ -519,7 +520,7 @@ class App(ttk.Frame):
         buf = io.StringIO()
         sys.stdout = buf
         try:
-            rc = jsons_to_tex(
+            rc = json2beamer(
                 input_json=json_in,
                 output_tex=out,
                 shuffle_seed=seed,
@@ -575,11 +576,15 @@ class App(ttk.Frame):
         t.start()
 
     def _run_json2beamer_and_pdflatex(self, json_in, out, seed, title, fsq, fsa, alert, is_temp):
+        import io, sys, subprocess, os
+        from pathlib import Path
+
+        # --- executar json2beamer com captura de stdout ---
         old_stdout = sys.stdout
         buf = io.StringIO()
         sys.stdout = buf
         try:
-            rc = jsons_to_tex(
+            rc = json2beamer(
                 input_json=json_in,
                 output_tex=out,
                 shuffle_seed=seed,
@@ -609,26 +614,62 @@ class App(ttk.Frame):
             return
 
         self.log(f"✅ .tex gerado: {out}")
+
+        # --- compilar com pdflatex, forçando UTF-8 e tolerando bytes inválidos ---
         try:
             tex_path = Path(out).resolve()
             workdir = tex_path.parent
             pdf_name = tex_path.with_suffix(".pdf").name
+            log_name = tex_path.with_suffix(".log").name
+
             cmd = ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_path.name]
+
+            # Ambiente (opcional, ajuda a padronizar I/O)
+            env = os.environ.copy()
+            env.setdefault("PYTHONIOENCODING", "utf-8")
+
             for i in range(2):
                 self.log(f"Compilando (passagem {i+1}/2)…")
-                proc = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True)
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(workdir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",   # <- chave para não usar CP-1252
+                    errors="replace"    # <- nunca quebrar por byte inválido (ex.: 0x81)
+                )
+
+                # Log da passagem (limito para não poluir)
                 if proc.stdout:
-                    self.log(proc.stdout.strip())
+                    tail = proc.stdout.strip()
+                    if len(tail) > 4000:
+                        tail = tail[-4000:]
+                    if tail:
+                        self.log(tail)
+
                 if proc.returncode != 0:
                     if proc.stderr:
                         self.log(proc.stderr.strip())
+
+                    # Tenta mostrar o fim do .log do LaTeX (ajuda a debugar)
+                    try:
+                        log_path = workdir / log_name
+                        if log_path.exists():
+                            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                                tail_lines = f.readlines()[-80:]
+                            self.log("[pdflatex .log - últimas linhas]")
+                            self.log("".join(tail_lines))
+                    except Exception as _e:
+                        self.log(f"(não consegui ler o .log: {_e})")
+
                     raise RuntimeError(f"pdflatex retornou código {proc.returncode}")
+
             pdf_path = workdir / pdf_name
             if pdf_path.exists():
                 self.var_status.set("PDF gerado com sucesso.")
                 self.log(f"✅ PDF gerado em: {pdf_path}")
                 try:
-                    import os
                     if os.name == "nt":
                         os.startfile(str(pdf_path))
                     else:
@@ -644,6 +685,7 @@ class App(ttk.Frame):
             self.var_status.set("Erro na compilação do PDF.")
             self.log(f"❌ Erro no pdflatex: {e}")
 
+
     def browse_template(self):
         sel = filedialog.askopenfilename(
             title="Escolher template .docx",
@@ -655,7 +697,7 @@ class App(ttk.Frame):
     def on_run_docx(self):
         if not self.validate_inputs():
             return
-        template = self.var_template.get().strip() or "template_prova.docx"
+        template = self.var_template.get().strip() or "assets/template_prova.docx"
         out_docx = self.var_output_docx.get().strip()
         if not out_docx:
             self.update_output_docx_path()
@@ -674,7 +716,15 @@ class App(ttk.Frame):
         self.log(f"Prova: template={template}, questões={total}, placeholder={placeholder}")
         def _job():
             try:
-                jsons_to_docx(template, jsons, out_docx, num=total, seed=seed, placeholder=placeholder)
+                jsons_to_docx(
+                    jsons,                 # primeiro: lista de JSONs
+                    template,              # segundo: template .docx
+                    out_docx,
+                    title=self.var_title.get().strip() or "Prova",
+                    num=total,
+                    seed=seed,
+                    placeholder=placeholder
+                )
                 self.var_status.set("Prova gerada com sucesso.")
                 self.log(f"✅ Prova gerada em: {out_docx}")
                 self._open_folder(str(Path(out_docx).resolve().parent))

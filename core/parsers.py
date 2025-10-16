@@ -26,13 +26,34 @@ def load_jsons(paths: List[str]) -> List[Dict[str, Any]]:
     return data
 
 def to_ir(raw_questions: List[Dict[str, Any]], title="Quiz") -> QuizIR:
-    """Valida e converte todas as questões em IR, com reindexação de id."""
     out: List[QuestionIR] = []
     for i, q in enumerate(raw_questions, start=1):
-        kind_str = q.get("type") or q.get("kind")
-        if not kind_str:
-            raise ValueError(f"Questão sem 'type': {q}")
-        kind = QuestionKind(kind_str)
+        # NOVO: aceitar vários jeitos de indicar o tipo
+        kind_val = q.get("type") or q.get("kind") or q.get("questionType")
+
+        if not kind_val and "tipo" in q:
+            # mapeia 1/2/3/4 -> enums
+            try:
+                tipo_int = int(q["tipo"])
+            except Exception:
+                raise ValueError(f"Campo 'tipo' inválido: {q.get('tipo')}")
+            mapa = {
+                1: QuestionKind.TYPE1,
+                2: QuestionKind.TYPE2,
+                3: QuestionKind.TYPE3,
+                4: QuestionKind.TYPE4,
+            }
+            kind = mapa.get(tipo_int)
+            if not kind:
+                raise ValueError(f"Tipo numérico não suportado: {tipo_int}")
+        else:
+            # aceita "type": "type1" (string)
+            if not kind_val:
+                raise ValueError(f"Questão sem 'type'/'tipo': {q}")
+            kind = QuestionKind(str(kind_val))
+
         builder = get_builder(kind)
         out.append(builder.build_ir(q, new_id=i))
+
     return QuizIR(title=title, questions=out)
+

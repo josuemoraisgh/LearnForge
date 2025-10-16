@@ -1,46 +1,42 @@
+# core/types/type3.py
 from typing import Dict, Any, List
-from ..models import QuestionIR, QuestionKind, Choice
-from ..utils import mathx
+from ..models import QuestionIR, QuestionKind, Choice, Asset
 from .base import QuestionTypeBuilder
+from ..utils import mathx  # se você usar matemática; se não, pode remover
 
 class Type3Builder(QuestionTypeBuilder):
     kind = QuestionKind.TYPE3
 
     def build_ir(self, raw: Dict[str, Any], new_id: int) -> QuestionIR:
-        # Ex.: raw contém números, operação, unidades; gerar prompt e alternativas
-        a = float(raw["a"])
-        b = float(raw["b"])
-        op = raw.get("op", "+")
-        if op == "+":
-            result = a + b
-        elif op == "-":
-            result = a - b
-        elif op == "*":
-            result = a * b
-        elif op == "/":
-            result = a / b if b != 0 else float("inf")
-        else:
-            raise ValueError(f"Operação não suportada: {op}")
+        prompt = (raw.get("prompt") or raw.get("enunciado") or "").strip()
 
-        result_fmt = mathx.round_sig(result, sig=4)
-        correct = Choice(text=str(result_fmt), is_correct=True)
+        # alternativas + correta vindas do JSON (independente da matemática)
+        alts = list(raw.get("alternativas") or raw.get("options") or [])
+        correta_txt = (raw.get("correta") or raw.get("answer") or "").strip()
+        if correta_txt and (correta_txt not in [str(a).strip() for a in alts]):
+            alts.append(correta_txt)
+        choices = [Choice(text=str(t), is_correct=(str(t).strip() == correta_txt)) for t in alts]
 
-        # distratores numéricos simples
-        ds = [
-            Choice(text=str(mathx.round_sig(result * 1.1, 4))),
-            Choice(text=str(mathx.round_sig(result * 0.9, 4))),
-            Choice(text=str(mathx.round_sig(result + 1, 4))),
-        ]
-        choices = [correct] + ds
+        # imagens / obs
+        imagens = raw.get("imagens") or raw.get("imagem")
+        if isinstance(imagens, str):
+            imagens = [imagens]
+        assets = [Asset(kind="image", src=s) for s in (imagens or [])]
 
-        prompt = raw.get("prompt") or f"Calcule: {a} {op} {b}"
-        sol = raw.get("solution") or f"Resultado: {result_fmt}"
+        # se você já tiver resoluções/variáveis e quiser calcular a correta, pode
+        # chamar sua lógica aqui; mas NÃO deixe de preencher as choices.
 
         return QuestionIR(
             id=new_id,
             kind=self.kind,
             prompt=prompt,
             choices=choices,
-            solution=sol,
-            metadata=raw.get("meta", {})
+            solution=(raw.get("solution") or raw.get("solucao")),
+            assets=assets,
+            metadata={
+                **(raw.get("meta") or {}),
+                "obs": raw.get("obs", []),
+                "variaveis": raw.get("variaveis"),
+                "resolucoes": raw.get("resolucoes"),
+            },
         )

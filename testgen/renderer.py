@@ -1,18 +1,30 @@
-from typing import List
-from docx import Document
-from core.models import QuizIR, QuestionIR
 
-def questions_to_plain(q: QuestionIR) -> str:
-    out = [f"{q.id}) {q.prompt}"]
-    for i, c in enumerate(q.choices, start=1):
-        out.append(f"   ({chr(96+i)}) {c.text}")  # a), b), c)...
-    return "\n".join(out)
+from __future__ import annotations
+from typing import List, Dict, Any
+from core.models import RenderOptions
+from core.pipeline import render_all
 
-def render_to_docx(quiz: QuizIR, template_path: str, out_docx: str, placeholder="{{QUESTOES}}"):
-    doc = Document(template_path)
-    body_plain = "\n\n".join(questions_to_plain(q) for q in quiz.questions)
-    # substitui placeholder em todos os parágrafos
-    for p in doc.paragraphs:
-        if placeholder in p.text:
-            p.text = p.text.replace(placeholder, body_plain)
-    doc.save(out_docx)
+def render_for_docx(raw_questions: List[Dict[str, Any]], seed: int|None=None, shuffle_questions: bool=True, shuffle_alternatives: bool=True) -> List[Dict[str, Any]]:
+    """
+    Returns a list of resolved questions for DOCX generator.
+    Shuffles both questions and alternatives (deterministic if seed given).
+    """
+    opts = RenderOptions(
+        target="testgen",
+        shuffle_questions=shuffle_questions,
+        shuffle_alternatives=shuffle_alternatives,
+        seed=seed,
+    )
+    rqs = render_all(raw_questions, opts)
+    out: List[Dict[str, Any]] = []
+    for r in rqs:
+        out.append({
+            "id": r.id,
+            "tipo": int(r.tipo),
+            "enunciado": r.enunciado,
+            "imagens": r.imagens,
+            "alternativas": r.alternativas,
+            "correta": r.correta,
+            "extra": r.extra,
+        })
+    return out
