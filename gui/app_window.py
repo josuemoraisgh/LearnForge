@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Janela principal da aplicação (Tk + ttk). Entrada via tabela (1 coluna).
-Novidades:
-- Editor com import robusto (corrige "attempted relative import beyond top-level package").
-- Drag-and-drop opcional: se `tkinterdnd2` estiver instalado, soltar arquivos na tabela adiciona linhas.
-- Tabela com altura fixa de 5 linhas (scroll só aparece quando >5).
+Janela principal com abas (Quiz / Test).
+- A aba **Quiz** contém: "Saída", "Opções" e os botões "Gerar .tex" e "Gerar PDF".
+- A aba **Test** (prova) integra gerar_prova_template.py para gerar um .docx:
+  Template (.docx), Nº de questões, Placeholder do template e Saída .docx.
+- O botão **Salvar Preferências** aparece nas duas abas.
+- A lista de JSONs (tabela) continua no topo (fora das abas), válida para ambas.
 """
 import io
 import json
@@ -27,17 +28,33 @@ except Exception:
     _HAS_DND = False
 
 from config.preferences import APP_NAME, get_ini_path, FONT_SIZES, DEFAULTS, load_prefs, save_prefs
-from core.beamer_generator import json2beamer
+from beamer.generator import jsons_to_tex
 from gui.scrollable_frame import ScrollableFrame
 
-TREE_HEIGHT_ROWS = 5
+def _import_gerar_prova():
+    try:
+        from test.gerar_prova_template import gerar_prova_template  # type: ignore
+        return gerar_prova_template
+    except Exception:
+        pass
+    here = Path(__file__).resolve()
+    candidate = (here.parent.parent / "gerar_prova_template.py")
+    if candidate.exists():
+        spec = importlib.util.spec_from_file_location("gerar_prova_template", str(candidate))
+        mod = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(mod)  # type: ignore
+        return getattr(mod, "gerar_prova_template")
+    raise ImportError("Não foi possível importar gerar_prova_template.py")
+
+TREE_HEIGHT_ROWS = 3
 
 class App(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=(10,10,10,6))
         self.master.title(APP_NAME)
-        self.master.geometry("980x640")
-        self.master.minsize(820, 540)
+        self.master.geometry("1100x760")
+        self.master.minsize(880, 560)
 
         self.grid(sticky="nsew")
         self.master.columnconfigure(0, weight=1)
@@ -66,17 +83,26 @@ class App(ttk.Frame):
         self.paned.add(self.top_container)
         self.paned.add(self.bottom)
 
-        # Carrega prefs (agora buscando .ini local se existir)
+        # prefs
         self.prefs = load_prefs()
         self.var_title = tk.StringVar(value=self.prefs["title"])
         self.var_fsq = tk.StringVar(value=self.prefs["fsq"])
         self.var_fsa = tk.StringVar(value=self.prefs["fsa"])
         self.var_alert = tk.StringVar(value=self.prefs["alert_color"])
         self.var_seed = tk.StringVar(value=self.prefs["shuffle_seed"])
+
         self.var_output = tk.StringVar(value="")
         self.var_status = tk.StringVar(value=f"Pronto. Config: {get_ini_path()}")
 
+        # Prova (Test) vars
+        self.var_template = tk.StringVar(value="template_prova.docx")
+        self.var_total_q = tk.IntVar(value=10)
+        self.var_placeholder = tk.StringVar(value="{{QUESTOES}}")
+        self.var_seed_test = tk.StringVar(value="")
+        self.var_output_docx = tk.StringVar(value="")
+
         self._build_top()
+        self._build_tabs()
         self._build_bottom()
         self._bind_events()
 
@@ -100,7 +126,6 @@ class App(ttk.Frame):
         files.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0,10))
         files.columnconfigure(0, weight=1)
 
-        # Tabela (5 linhas visíveis)
         self.tbl = ttk.Treeview(files, columns=("path",), show="headings",
                                 selectmode="browse", style="Json.Treeview", height=TREE_HEIGHT_ROWS)
         self.tbl.heading("path", text="JSON de questões (arraste e solte aqui)")
@@ -118,27 +143,48 @@ class App(ttk.Frame):
         ttk.Button(btns, text="Adicionar…", command=self.browse_jsons).pack(side="left")
         self.btn_delete = ttk.Button(btns, text="Deletar", command=self.delete_selected, state="disabled")
         self.btn_delete.pack(side="left", padx=(6,0))
+        self.btn_editor = ttk.Button(btns, text="Revisar/Editar Questões…", command=self.open_editor, state="disabled")
+        self.btn_editor.pack(side="left", padx=(10,0))
 
-        out = ttk.LabelFrame(self.top, text="Saída", padding=8)
-        out.grid(row=1, column=0, sticky="ew", pady=(0,10))
+        if _HAS_DND and hasattr(self.tbl, "drop_target_register"):
+            try:
+                self.tbl.drop_target_register(DND_FILES)
+                self.tbl.dnd_bind("<<Drop>>", self._on_drop_files)
+            except Exception:
+                pass
+
+        self.tbl.bind("<<TreeviewSelect>>", lambda e: self._update_buttons_state())
+        self.tbl.bind("<Double-1>", lambda e: self.open_editor())
+
+    def _build_tabs(self):
+        nb = ttk.Notebook(self.top)
+        nb.grid(row=1, column=0, sticky="nsew", pady=(0,6))
+        self.nb = nb
+
+        # --- TAB QUIZ ---
+        self.tab_quiz = ttk.Frame(nb, padding=6)
+        nb.add(self.tab_quiz, text="Quiz")
+
+        out = ttk.LabelFrame(self.tab_quiz, text="Saída", padding=8)
+        out.grid(row=0, column=0, sticky="ew", pady=(0,10))
         out.columnconfigure(1, weight=1)
         ttk.Label(out, text="Arquivo .tex de saída:").grid(row=0, column=0, sticky="w", padx=(6,2), pady=6)
         ttk.Entry(out, textvariable=self.var_output, state="readonly").grid(row=0, column=1, sticky="ew", padx=(0,6), pady=6)
         ttk.Button(out, text="Abrir Pasta", command=self.open_output_dir).grid(row=0, column=2, padx=(0,6))
 
-        opts = ttk.LabelFrame(self.top, text="Opções", padding=8)
-        opts.grid(row=2, column=0, sticky="ew")
+        opts = ttk.LabelFrame(self.tab_quiz, text="Opções", padding=8)
+        opts.grid(row=1, column=0, sticky="ew")
         for c in range(6):
             opts.columnconfigure(c, weight=(1 if c in (1,3,5) else 0))
 
         ttk.Label(opts, text="Título:").grid(row=0, column=0, sticky="w", padx=(6,2), pady=6)
         ttk.Entry(opts, textvariable=self.var_title).grid(row=0, column=1, columnspan=5, sticky="ew", padx=(0,6))
 
-        ttk.Label(opts, text="Fonte Enunciado (fsq):").grid(row=1, column=0, sticky="w", padx=(6,2), pady=6)
+        ttk.Label(opts, text="Fonte Enunciado:").grid(row=1, column=0, sticky="w", padx=(6,2), pady=6)
         ttk.Combobox(opts, values=FONT_SIZES, textvariable=self.var_fsq, state="readonly")\
             .grid(row=1, column=1, sticky="ew", padx=(0,12))
 
-        ttk.Label(opts, text="Fonte Alternativas (fsa):").grid(row=1, column=2, sticky="w", padx=(6,2))
+        ttk.Label(opts, text="Fonte Alternativas:").grid(row=1, column=2, sticky="w", padx=(6,2))
         ttk.Combobox(opts, values=FONT_SIZES, textvariable=self.var_fsa, state="readonly")\
             .grid(row=1, column=3, sticky="ew", padx=(0,12))
 
@@ -148,30 +194,46 @@ class App(ttk.Frame):
         ttk.Entry(frm_color, textvariable=self.var_alert).pack(side="left", fill="x", expand=True)
         ttk.Button(frm_color, text="🎨", width=3, command=self.pick_color).pack(side="left", padx=(6,0))
 
-        ttk.Label(opts, text="Seed de Embaralhamento (opcional):").grid(row=2, column=0, sticky="w", padx=(6,2), pady=(0,8))
+        ttk.Label(opts, text="Seed de Embaralhamento:").grid(row=2, column=0, sticky="w", padx=(6,2), pady=(0,8))
         ttk.Entry(opts, textvariable=self.var_seed).grid(row=2, column=1, sticky="ew", padx=(0,12), pady=(0,8))
         ttk.Label(opts, text="(vazio = aleatório a cada execução)").grid(row=2, column=2, columnspan=4, sticky="w", pady=(0,8))
 
-        actions = ttk.Frame(self.top, padding=(0,8,0,0))
-        actions.grid(row=3, column=0, sticky="ew")
-        actions.columnconfigure(0, weight=1)
-        ttk.Button(actions, text="Gerar .tex", command=self.on_run, style="Accent.TButton").grid(row=0, column=0, sticky="w")
-        ttk.Button(actions, text="Gerar PDF", command=self.on_run_pdf, style="Accent.TButton").grid(row=0, column=0, padx=104, sticky="w")
-        ttk.Button(actions, text="Salvar Preferências", command=self.on_save).grid(row=0, column=1, padx=8, sticky="w")
-        self.btn_editor = ttk.Button(actions, text="Revisar/Editar Questões…", command=self.open_editor, state="disabled")
-        self.btn_editor.grid(row=0, column=2, padx=8, sticky="w")
+        actions = ttk.Frame(self.tab_quiz, padding=(0,8,0,0))
+        actions.grid(row=2, column=0, sticky="ew")
+        ttk.Button(actions, text="Gerar .tex", command=self.on_run, style="Accent.TButton").pack(side="left")
+        ttk.Button(actions, text="Gerar PDF", command=self.on_run_pdf, style="Accent.TButton").pack(side="left", padx=12)
+        ttk.Button(actions, text="Salvar Preferências", command=self.on_save).pack(side="right")
 
-        # Seleção/duplo-clique
-        self.tbl.bind("<<TreeviewSelect>>", lambda e: self._update_buttons_state())
-        self.tbl.bind("<Double-1>", lambda e: self.open_editor())
+        # --- TAB TEST ---
+        self.tab_test = ttk.Frame(nb, padding=6)
+        nb.add(self.tab_test, text="Test")
 
-        # Drag-and-drop (se disponível)
-        if _HAS_DND and hasattr(self.tbl, "drop_target_register"):
-            try:
-                self.tbl.drop_target_register(DND_FILES)
-                self.tbl.dnd_bind("<<Drop>>", self._on_drop_files)
-            except Exception:
-                pass
+        t_files = ttk.LabelFrame(self.tab_test, text="Template e Saída", padding=8)
+        t_files.grid(row=0, column=0, sticky="ew", pady=(0,10))
+        t_files.columnconfigure(1, weight=1)
+
+        ttk.Label(t_files, text="Template (.docx):").grid(row=0, column=0, sticky="w", padx=(6,2), pady=6)
+        ttk.Entry(t_files, textvariable=self.var_template).grid(row=0, column=1, sticky="ew", padx=(0,6), pady=6)
+        ttk.Button(t_files, text="Procurar…", command=self.browse_template).grid(row=0, column=2, padx=(0,6))
+
+        ttk.Label(t_files, text="Saída (.docx):").grid(row=1, column=0, sticky="w", padx=(6,2), pady=6)
+        ttk.Entry(t_files, textvariable=self.var_output_docx, state="readonly").grid(row=1, column=1, sticky="ew", padx=(0,6), pady=6)
+        ttk.Button(t_files, text="Abrir Pasta", command=self.open_output_dir_docx).grid(row=1, column=2, padx=(0,6))
+
+        t_opts = ttk.LabelFrame(self.tab_test, text="Opções da Prova", padding=8)
+        t_opts.grid(row=1, column=0, sticky="ew")
+        t_opts.columnconfigure(1, weight=1)
+        ttk.Label(t_opts, text="Nº de questões:").grid(row=0, column=0, sticky="w", padx=(6,2), pady=6)
+        ttk.Spinbox(t_opts, from_=1, to=100, textvariable=self.var_total_q, width=6).grid(row=0, column=1, sticky="w", pady=6)
+        ttk.Label(t_opts, text="Seed (opcional):").grid(row=0, column=2, sticky="w", padx=(12,2))
+        ttk.Entry(t_opts, textvariable=self.var_seed_test, width=12).grid(row=0, column=3, sticky="w")
+        ttk.Label(t_opts, text="Placeholder no template:").grid(row=1, column=0, sticky="w", padx=(6,2))
+        ttk.Entry(t_opts, textvariable=self.var_placeholder).grid(row=1, column=1, columnspan=3, sticky="ew")
+
+        t_actions = ttk.Frame(self.tab_test, padding=(0,8,0,0))
+        t_actions.grid(row=2, column=0, sticky="ew")
+        ttk.Button(t_actions, text="Gerar Prova (.docx)", command=self.on_run_docx, style="Accent.TButton").pack(side="left")
+        ttk.Button(t_actions, text="Salvar Preferências", command=self.on_save).pack(side="right")
 
     def _build_bottom(self):
         ttk.Label(self.bottom, text="Log").grid(row=0, column=0, sticky="w")
@@ -196,7 +258,6 @@ class App(ttk.Frame):
         status.grid(row=2, column=0, columnspan=2, sticky="ew")
         ttk.Label(status, textvariable=self.var_status).grid(row=0, column=0, sticky="w")
 
-    # ====== constraints e sash ======
     def _apply_pane_constraints_and_place_sash(self):
         try:
             f = tkfont.nametofont(self.txt_log.cget("font"))
@@ -204,7 +265,7 @@ class App(ttk.Frame):
         except Exception:
             line_h = 16
         log_min_px = int(line_h * 5 + 24)
-        top_min_px = 400
+        top_min_px = 520
         try:
             self.paned.paneconfigure(self.bottom, minsize=log_min_px)
             self.paned.paneconfigure(self.top_container, minsize=top_min_px)
@@ -231,7 +292,6 @@ class App(ttk.Frame):
             self.bind("<Configure>", _on_resize)
             self._resize_bound = True
 
-    # ====== utils ======
     def _show_log_menu(self, event):
         try:
             self._log_menu.tk_popup(event.x_root, event.y_root)
@@ -251,7 +311,6 @@ class App(ttk.Frame):
         for w in (self, self.top_container, self.bottom, self.top):
             w.grid_propagate(True)
 
-    # ====== tabela / DnD ======
     def _on_drop_files(self, event):
         raw = event.data
         paths = []
@@ -274,7 +333,6 @@ class App(ttk.Frame):
                 token += ch
         if token:
             paths.append(token)
-
         jsons = [p for p in paths if p.lower().endswith(".json")]
         if jsons:
             self._add_json_paths(jsons)
@@ -295,6 +353,7 @@ class App(ttk.Frame):
         self.update_output_path()
         self._update_buttons_state()
         self._update_scrollbar_visibility()
+        self.update_output_docx_path()
 
     def browse_jsons(self):
         sel = filedialog.askopenfilenames(
@@ -313,6 +372,7 @@ class App(ttk.Frame):
         self.update_output_path()
         self._update_buttons_state()
         self._update_scrollbar_visibility()
+        self.update_output_docx_path()
 
     def _update_buttons_state(self):
         sel = self.tbl.selection()
@@ -345,11 +405,30 @@ class App(ttk.Frame):
             out = first.with_name(first.stem + "_combined_slides.tex")
         self.var_output.set(str(out))
 
+    def update_output_docx_path(self):
+        paths = self._get_json_paths()
+        if not paths:
+            self.var_output_docx.set("")
+            return
+        first = Path(paths[0])
+        out = first.with_name(first.stem + "_prova.docx")
+        self.var_output_docx.set(str(out))
+
     def open_output_dir(self):
         out = self.var_output.get().strip()
         if not out:
             return
         folder = str(Path(out).resolve().parent)
+        self._open_folder(folder)
+
+    def open_output_dir_docx(self):
+        out = self.var_output_docx.get().strip()
+        if not out:
+            return
+        folder = str(Path(out).resolve().parent)
+        self._open_folder(folder)
+
+    def _open_folder(self, folder):
         try:
             if sys.platform.startswith("win"):
                 import os
@@ -378,7 +457,6 @@ class App(ttk.Frame):
         finally:
             self.txt_log.configure(state="disabled")
 
-    # ====== validação e preparação ======
     def _load_and_merge_jsons(self, paths):
         all_qs = []
         for p in paths:
@@ -416,7 +494,6 @@ class App(ttk.Frame):
             return False
         return True
 
-    # ====== ações ======
     def on_run(self):
         if not self.validate_inputs():
             return
@@ -456,7 +533,7 @@ class App(ttk.Frame):
         buf = io.StringIO()
         sys.stdout = buf
         try:
-            rc = json2beamer(
+            rc = jsons_to_tex(
                 input_json=json_in,
                 output_tex=out,
                 shuffle_seed=seed,
@@ -516,7 +593,7 @@ class App(ttk.Frame):
         buf = io.StringIO()
         sys.stdout = buf
         try:
-            rc = json2beamer(
+            rc = jsons_to_tex(
                 input_json=json_in,
                 output_tex=out,
                 shuffle_seed=seed,
@@ -581,41 +658,73 @@ class App(ttk.Frame):
             self.var_status.set("Erro na compilação do PDF.")
             self.log(f"❌ Erro no pdflatex: {e}")
 
-    # ====== Editor com import robusto ======
+    def browse_template(self):
+        sel = filedialog.askopenfilename(
+            title="Escolher template .docx",
+            filetypes=[("Documento do Word", "*.docx"), ("Todos", "*.*")]
+        )
+        if sel:
+            self.var_template.set(sel)
+
+    def on_run_docx(self):
+        if not self.validate_inputs():
+            return
+        template = self.var_template.get().strip() or "template_prova.docx"
+        out_docx = self.var_output_docx.get().strip()
+        if not out_docx:
+            self.update_output_docx_path()
+            out_docx = self.var_output_docx.get().strip()
+        if not out_docx:
+            messagebox.showerror("Prova", "Defina arquivos JSON para que possamos sugerir a saída .docx.")
+            return
+
+        total = int(self.var_total_q.get() or 10)
+        placeholder = self.var_placeholder.get().strip() or "{{QUESTOES}}"
+        seed_s = self.var_seed_test.get().strip()
+        seed = int(seed_s) if seed_s.isdigit() else None
+
+        try:
+            gerar_prova_template = _import_gerar_prova()
+        except Exception as e:
+            messagebox.showerror("Prova", f"Erro importando gerar_prova_template.py:\n{e}")
+            return
+
+        jsons = self._get_json_paths()
+        self.var_status.set("Gerando prova .docx…")
+        self.log(f"Prova: template={template}, questões={total}, placeholder={placeholder}")
+        def _job():
+            try:
+                gerar_prova_template(template, jsons, out_docx, num=total, seed=seed, placeholder=placeholder)
+                self.var_status.set("Prova gerada com sucesso.")
+                self.log(f"✅ Prova gerada em: {out_docx}")
+                self._open_folder(str(Path(out_docx).resolve().parent))
+            except Exception as e:
+                self.var_status.set("Erro gerando prova.")
+                self.log(f"❌ Erro gerando prova: {e}")
+                messagebox.showerror("Prova", f"Erro gerando prova:\n{e}")
+        threading.Thread(target=_job, daemon=True).start()
+
     def _get_question_editor_class(self):
-        # Tentativa 1: pacote instalado/nomeado
         try:
             from json2beamer_app.editor.question_editor import QuestionEditor  # type: ignore
             return QuestionEditor
         except Exception:
             pass
-        # Tentativa 2: import relativo (quando executado via módulo)
-        try:
-            from ..editor.question_editor import QuestionEditor  # type: ignore
-            return QuestionEditor
-        except Exception:
-            pass
-        # Tentativa 3: adicionar raiz do projeto ao sys.path e tentar 'editor.question_editor'
-        here = Path(__file__).resolve()
-        project_root = here.parent.parent  # .../json2beamer_app
-        parent_of_root = project_root.parent
-        if str(parent_of_root) not in sys.path:
-            sys.path.insert(0, str(parent_of_root))
         try:
             from editor.question_editor import QuestionEditor  # type: ignore
             return QuestionEditor
         except Exception:
             pass
-        # Tentativa 4: carregar por caminho de arquivo
-        editor_path = (project_root / "editor" / "question_editor.py").resolve()
-        if editor_path.exists():
-            spec = importlib.util.spec_from_file_location("json2beamer_editor_fallback", str(editor_path))
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)  # type: ignore
-                if hasattr(mod, "QuestionEditor"):
-                    return getattr(mod, "QuestionEditor")
-        raise ImportError("Não foi possível localizar QuestionEditor. Verifique a estrutura do projeto.")
+        here = Path(__file__).resolve()
+        candidate = (here.parent.parent / "editor" / "question_editor.py")
+        if candidate.exists():
+            spec = importlib.util.spec_from_file_location("question_editor", str(candidate))
+            mod = importlib.util.module_from_spec(spec)
+            assert spec and spec.loader
+            spec.loader.exec_module(mod)  # type: ignore
+            if hasattr(mod, "QuestionEditor"):
+                return getattr(mod, "QuestionEditor")
+        raise ImportError("Não foi possível localizar QuestionEditor.")
 
     def open_editor(self):
         sel = self.tbl.selection()
