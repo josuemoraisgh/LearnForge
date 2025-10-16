@@ -1,0 +1,111 @@
+name: windows-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'   # ex.: v1.2.3
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    env:
+      APP_NAME: LearnForge
+      ENTRYPOINT: main.py
+      PYTHON_VERSION: '3.12'
+      DIST_DIR: dist
+      BUILD_DIR: build
+      # pastas que precisam ir dentro do executável (SRC;DEST) — uma por linha
+      ADD_DATA_DIRS: >
+        assets;assets
+        beamer;beamer
+        core;core
+        editor;editor
+        testgen;testgen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.10.0
+
+      - name: Compute version
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag -or -not $tag.StartsWith("v")) {
+            $tag = (Get-Date -Format "yyyy.MM.dd.HHmm")
+          }
+          echo "version=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build EXE with PyInstaller
+        shell: pwsh
+        run: |
+          $name = "${{ env.APP_NAME }}"
+          $entry = "${{ env.ENTRYPOINT }}"
+          # Monta os --add-data (formato Windows: SRC;DEST)
+          $datas = @()
+          "${{ env.ADD_DATA_DIRS }}".Split("`n") | ForEach-Object {
+            $line = $_.Trim()
+            if ($line) { $datas += "--add-data `"$line`"" }
+          }
+          # Hidden imports para lxml/python-docx evitarem erro em runtime
+          $hidden = @(
+            "--hidden-import lxml._elementpath",
+            "--hidden-import docx.opc.constants",
+            "--hidden-import docx.oxml",
+            "--hidden-import docx.oxml.ns",
+            "--hidden-import docx.oxml.parser"
+          )
+          pyinstaller --noconfirm --clean `
+            --name "$name" `
+            --onefile `
+            --windowed `
+            $hidden `
+            $datas `
+            "$entry"
+
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $exe = Join-Path "${{ env.DIST_DIR }}" "${{ env.APP_NAME }}.exe"
+          $out = Join-Path "artifacts" ("${{ env.APP_NAME }}-${{ steps.ver.outputs.version }}.exe")
+          Copy-Item $exe $out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows-${{ steps.ver.outputs.version }}
+          path: artifacts/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach to Release (only on tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.exe
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
