@@ -3,16 +3,16 @@
 Geração de slides Beamer a partir de JSON de questões.
 
 Padrões aplicados:
-- Preâmbulo conforme template usado no projeto (beamer + Madrid, etc.).
+- Preâmbulo conforme template (beamer + Madrid, etc.) com mapeamento Unicode.
 - Ordena por id; título do frame: "<id>) <enunciado>".
-- Dois frames por questão: (1) sem gabarito; (2) com gabarito (\\alert{...}).
+- Dois frames por questão: (1) sem gabarito; (2) com gabarito (\alert{...}).
 - Frame adicional de OBS. quando houver.
 - Alternativas sempre a), b), c), d).
-- Tipo 4: afirmativas em linha única "I. ...; II. ...; ..." (escapadas e com \\par).
+- Tipo 4: afirmativas em linha única "I. ...; II. ...; ..." (escapadas e com \par).
 - Tipo 2: alternativas por imagem; se arquivo não existir (relativo ao JSON), desenha um quadro vazio.
 - Caminhos de imagem sempre relativos ao diretório do JSON.
 
-Compatível com a GUI já existente:
+Compatível com a GUI:
 json2beamer(input_json, output_tex, shuffle_seed, title, fsq, fsa, alert_color, **kwargs)
 """
 
@@ -21,8 +21,11 @@ from typing import List, Dict, Any
 from pathlib import Path
 import json
 
+# Importa o resolvedor do Tipo 3 (variáveis, resoluções e substituições <...>)
+from core.variables import resolve_all
+
 # --------------------------------------------------------------------
-# Helpers internos (auto-contidos para evitar dependência externa)
+# Helpers internos
 # --------------------------------------------------------------------
 
 IMG_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.pdf')
@@ -98,7 +101,7 @@ def render_images(imgs: List[str], base_dir: str | None = None) -> str:
 
 def render_afirmacoes_line(afirm: Dict[str, str]) -> str:
     """
-    Linha única 'I. ...; II. ...; ...' escapada e precedida de \\par.
+    Linha única 'I. ...; II. ...; ...' escapada e precedida de \par.
     Ordem fixa I, II, III… (sem embaralhar).
     """
     if not afirm:
@@ -144,8 +147,8 @@ def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
             else:
                 lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
         else:
-            # Se a alternativa declarada não é imagem, ainda assim mostramos um quadro (com rótulo),
-            # conforme sua orientação de “um quadro vazio” quando não há figura.
+            # Alternativa declarada como não-imagem em uma questão do tipo 2:
+            # ainda assim mostramos um quadro (com rótulo), conforme orientação.
             lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
     lines.append(r"\end{itemize}")
     return "\n".join(lines)
@@ -164,17 +167,18 @@ def _load_json_list(p: str) -> List[Dict[str, Any]]:
 def json2beamer(
     input_json='assets/questoes_template.json',
     output_tex='assets/questoes_template_slides.tex',
-    shuffle_seed=None,             # aceito por compatibilidade; não embaralhamos no Beamer
+    shuffle_seed=None,             # não embaralhamos no Beamer; usado como seed do resolver T3
     title='Exercícios – Apresentação',
     fsq='Large',
     fsa='normalsize',
-    alert_color='red',             # aceito por compatibilidade; \alert usa cor do tema
+    alert_color='red',             # compatibilidade; \alert usa cor do tema
     **kwargs
 ) -> int:
     """
     Gera .tex Beamer conforme o padrão acordado.
     - Ordem das questões por id (sem shuffle).
     - Caminhos de imagem relativos ao diretório do JSON.
+    - Resolve Tipo 3 (variáveis/resoluções e substituições <...>) antes de renderizar.
     """
     # Carregar JSON(s) e detectar diretório base das imagens relativo ao JSON
     if isinstance(input_json, (list, tuple)):
@@ -194,7 +198,7 @@ def json2beamer(
     except Exception:
         pass
 
-    # PREÂMBULO conforme seu template
+    # PREÂMBULO com mapeamento Unicode necessário ao pdfLaTeX
     preamble = (
         "\\documentclass[12pt]{beamer}\n"
         "\\usepackage{bookmark}\n"
@@ -204,6 +208,32 @@ def json2beamer(
         "\\usetheme{Madrid}\n"
         "\\usepackage{graphicx}\n"
         "\\usepackage{enumitem}\n"
+        "% --- Unicode em pdfLaTeX ---\n"
+        "\\usepackage{newunicodechar}\n"
+        "% Grego minúsculo\n"
+        "\\DeclareUnicodeCharacter{03B1}{\\ensuremath{\\alpha}}\n"      # α
+        "\\DeclareUnicodeCharacter{03B2}{\\ensuremath{\\beta}}\n"       # β
+        "\\DeclareUnicodeCharacter{03B3}{\\ensuremath{\\gamma}}\n"      # γ
+        "\\DeclareUnicodeCharacter{03B4}{\\ensuremath{\\delta}}\n"      # δ
+        "\\DeclareUnicodeCharacter{03B5}{\\ensuremath{\\varepsilon}}\n" # ε
+        "\\DeclareUnicodeCharacter{03B8}{\\ensuremath{\\theta}}\n"      # θ
+        "\\DeclareUnicodeCharacter{03BB}{\\ensuremath{\\lambda}}\n"     # λ
+        "\\DeclareUnicodeCharacter{03BC}{\\ensuremath{\\mu}}\n"         # μ
+        "\\DeclareUnicodeCharacter{03C0}{\\ensuremath{\\pi}}\n"         # π
+        "\\DeclareUnicodeCharacter{03C1}{\\ensuremath{\\rho}}\n"        # ρ
+        "\\DeclareUnicodeCharacter{03C3}{\\ensuremath{\\sigma}}\n"      # σ
+        "\\DeclareUnicodeCharacter{03C6}{\\ensuremath{\\varphi}}\n"     # φ
+        "\\DeclareUnicodeCharacter{03C9}{\\ensuremath{\\omega}}\n"      # ω
+        "% Grego maiúsculo\n"
+        "\\DeclareUnicodeCharacter{0394}{\\ensuremath{\\Delta}}\n"      # Δ
+        "\\DeclareUnicodeCharacter{03A9}{\\ensuremath{\\Omega}}\n"      # Ω
+        "% Símbolos comuns\n"
+        "\\DeclareUnicodeCharacter{00B0}{\\ensuremath{^{\\circ}}}\n"    # °
+        "\\DeclareUnicodeCharacter{00D7}{\\ensuremath{\\times}}\n"      # ×
+        "\\DeclareUnicodeCharacter{2212}{-}\n"                          # − (minus sign U+2212) -> hífen
+        "% Espaços especiais\n"
+        "\\DeclareUnicodeCharacter{00A0}{~}\n"                          # NBSP
+        "\\DeclareUnicodeCharacter{202F}{\\,}\n"                        # NNBSP -> espaço fino
         "\\title{" + latex_escape(title) + "}\n"
         "\\author{}\n"
         "\\date{}\n"
@@ -218,33 +248,35 @@ def json2beamer(
     ]
 
     for q in qs:
-        qid = q.get("id", "?")
-        enun = (q.get("enunciado", "") or "").strip()
-        enun_tex = latex_escape(enun)
-        tipo = int(q.get("tipo", 1))
+        # --- RESOLVE TIPO 3 (variáveis + resoluções + substituições <...>) ---
+        q_res, _env = resolve_all(q, seed=shuffle_seed)
 
-        # Alternativas: SEM embaralhar no Beamer; garante correta presente
-        alts = _alts_with_correct(q)
+        qid = q_res.get("id", "?")
+        enun = (q_res.get("enunciado", "") or "").strip()
+        enun_tex = latex_escape(enun)
+        tipo = int(q_res.get("tipo", 1))
+
+        # Alternativas (no Beamer, sem embaralhar), garantindo correta presente
+        alts = _alts_with_correct(q_res)
+
+        # Imagens do enunciado
+        imgs = q_res.get("imagens") or []
 
         # ---------------- Frame 1: sem gabarito ----------------
         parts.append("\\begin{frame}")
         parts.append(f"\\frametitle{{{qid}) {enun_tex}}}")
         parts.append("{\\BodySize")
 
-        # Imagens do enunciado
-        imgs = q.get("imagens") or []
         if imgs:
             parts.append(render_images(imgs, base_dir=base_dir))
 
-        # Afirmativas (Tipo 4) — linha única com escape + \par
-        if q.get("afirmacoes"):
-            parts.append(render_afirmacoes_line(q["afirmacoes"]))
+        if q_res.get("afirmacoes"):
+            parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
 
-        # Alternativas
         if tipo == 2:
             parts.append(render_alts_images(alts, base_dir=base_dir))
         else:
-            parts.append(render_alts_text(alts, q.get("correta", ""), highlight=False))
+            parts.append(render_alts_text(alts, q_res.get('correta', ''), highlight=False))
 
         parts.append("}")
         parts.append("\\end{frame}\n")
@@ -257,21 +289,21 @@ def json2beamer(
         if imgs:
             parts.append(render_images(imgs, base_dir=base_dir))
 
-        if q.get("afirmacoes"):
-            parts.append(render_afirmacoes_line(q["afirmacoes"]))
+        if q_res.get("afirmacoes"):
+            parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
 
         if tipo == 2:
             # Para imagem, mantemos sem highlight; apenas repetimos as imagens/quadro
             parts.append(render_alts_images(alts, base_dir=base_dir))
         else:
             # Para texto, destaca a correta
-            parts.append(render_alts_text(alts, q.get("correta", ""), highlight=True))
+            parts.append(render_alts_text(alts, q_res.get('correta', ''), highlight=True))
 
         parts.append("}")
         parts.append("\\end{frame}\n")
 
         # ---------------- Frame 3: OBS (se houver) ----------------
-        obs = q.get("obs")
+        obs = q_res.get("obs")
         obs_items = []
         if isinstance(obs, str) and obs.strip():
             obs_items = [obs.strip()]
