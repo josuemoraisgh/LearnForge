@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import json, random
-
+from core.variables import resolve_all  # <-- necessário para q_res, _env = resolve_all(...)
 from docx import Document
 from docx.shared import Inches
 
@@ -80,7 +80,26 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
     - Alternativas rotuladas a), b), c)...
     - Tipo 2: insere imagem; se faltar, usa placeholder.
     """
-    # Imagens do enunciado
+    runs: List[Dict[str, Any]] = []
+    alph = "abcdefghijklmnopqrstuvwxyz"
+    base_dir = q.get("_base_dir") or q.get("__json_dir") or ""
+    placeholder = "assets/placeholder.png"
+
+    # 1) Enunciado
+    runs.append({"type":"text","text": f"{seq}) {q['enunciado']}\n"})
+
+    # 2) (Opcional) Linha de afirmativas do Tipo 4
+    line = (q.get("extra") or {}).get("afirmacoes_line", "")
+    if not line:
+        afirm = q.get("afirmacoes") or {}
+        if isinstance(afirm, dict) and afirm:
+            order = ["I","II","III","IV","V","VI","VII","VIII","IX","X"]
+            labeled = [f"{k}. {afirm[k]}" for k in order if k in afirm]
+            line = "; ".join(labeled)
+    if line:
+        runs.append({"type":"text","text": "  " + line + "\n"})
+
+    # 3) Imagens do enunciado (AGORA entre enunciado e alternativas)
     imgs = q.get("imagens") or []
     for img in imgs:
         spec_p, wmm, hmm = _parse_img_spec(img)
@@ -88,22 +107,12 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
         if p.exists():
             runs.append({"type":"image","path": str(p), "width_mm": wmm, "height_mm": hmm})
         else:
+            # se preferir, deixe um marcador textual
             runs.append({"type":"text","text": "[imagem]\n"})
-    
-    runs: List[Dict[str, Any]] = []
-    alph = "abcdefghijklmnopqrstuvwxyz"
-    base_dir = q.get("_base_dir")
-    placeholder = "assets/placeholder.png"
+    if imgs:
+        runs.append({"type":"text","text": "\n"})  # respiro antes das alternativas
 
-    # Enunciado
-    runs.append({"type":"text","text": f"{seq}) {q['enunciado']}\n"})
-
-    # Afirmativas (linha única)
-    line = (q.get("extra") or {}).get("afirmacoes_line", "") or _afirm_line(q)
-    if line:
-        runs.append({"type":"text","text": "  " + line + "\n"})
-
-    # Alternativas
+    # 4) Alternativas
     alts = q.get("alternativas") or []
     for i, alt in enumerate(alts):
         label = alph[i] + ")" if i < len(alph) else f"{i+1})"
@@ -122,6 +131,7 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
 
     runs.append({"type":"text","text": "\n"})
     return runs
+
 
 def _render_blocks_for_docx(resolved: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
     return [_compose_docx_block(q, i+1) for i, q in enumerate(resolved)]
