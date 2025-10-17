@@ -95,6 +95,13 @@ def resolve_all(question: Dict[str, Any], seed: int|None) -> Tuple[Dict[str, Any
     if "resolucoes" in q and isinstance(q["resolucoes"], dict):
         q["resolucoes"] = {k: sub(v) for k,v in q["resolucoes"].items()}
 
+    # Apply substitution to obs (list or string)
+    if "obs" in q:
+        if isinstance(q["obs"], list):
+            q["obs"] = [sub(o) if isinstance(o, str) else o for o in q["obs"]]
+        elif isinstance(q["obs"], str):
+            q["obs"] = sub(q["obs"]) 
+
     return q, env
 
 def json_clone(x):  # simples cópia profunda via JSON

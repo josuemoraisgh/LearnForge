@@ -4,15 +4,19 @@ from typing import List, Dict, Any
 import re
 
 def _parse_img_spec(s: str):
+    """Parse 'path;LxA' -> (path, L, A) in mm; or (path, None, None)."""
     if not isinstance(s, str):
         return s, None, None
     if ';' in s:
         path, size = s.split(';',1)
+        import re
         m = re.match(r'^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$', size.strip())
         if m:
             return path.strip(), float(m.group(1)), float(m.group(2))
         return path.strip(), None, None
     return s.strip(), None, None
+
+
 
 def preview_text(questions: List[Dict[str, Any]], title: str|None=None, **kwargs) -> str:
     """

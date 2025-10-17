@@ -7,15 +7,11 @@ import json, random
 from docx import Document
 from docx.shared import Inches
 
-def mm_to_inches(mm):
+def mm_to_inches(mm: float) -> float:
     return (mm or 0) / 25.4
 
-# >>> Resolver do Tipo 3 (variáveis, resoluções e substituições <...>)
-from core.variables import resolve_all
-
-IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".pdf")
-
 def _parse_img_spec(s: str):
+    """Parse 'path;LxA' -> (path, L, A) in mm; or (path, None, None)."""
     if not isinstance(s, str):
         return s, None, None
     if ';' in s:
@@ -26,6 +22,11 @@ def _parse_img_spec(s: str):
             return path.strip(), float(m.group(1)), float(m.group(2))
         return path.strip(), None, None
     return s.strip(), None, None
+
+# >>> Resolver do Tipo 3 (variáveis, resoluções e substituições <...>)
+from core.variables import resolve_all
+
+IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".pdf")
 
 def _read_text_any(p: Path) -> str:
     b = p.read_bytes()
@@ -98,10 +99,11 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
         label = alph[i] + ")" if i < len(alph) else f"{i+1})"
         s = str(alt or "")
         if _is_image_path(s):
-            p = Path(base_dir, s) if base_dir else Path(s)
+            spec_p, wmm, hmm = _parse_img_spec(s)
+            p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
             runs.append({"type":"text","text": f"  {label} "})
             if p.exists():
-                runs.append({"type":"image","path": str(p)})
+                runs.append({"type":"image","path": str(p), "width_mm": wmm, "height_mm": hmm})
             else:
                 runs.append({"type":"image","path": placeholder})
             runs.append({"type":"text","text": "\n"})
@@ -183,10 +185,10 @@ def json2docx(
                         elif run["type"] == "image":
                             try:
                                 wmm = run.get("width_mm"); hmm = run.get("height_mm")
-                        if wmm and hmm:
-                            pr.add_run().add_picture(run["path"], width=Inches(mm_to_inches(wmm)), height=Inches(mm_to_inches(hmm)))
-                        else:
-                            pr.add_run().add_picture(run["path"], width=Inches(5.5))
+                                if wmm and hmm:
+                                    pr.add_run().add_picture(run["path"], width=Inches(mm_to_inches(wmm)), height=Inches(mm_to_inches(hmm)))
+                                else:
+                                    pr.add_run().add_picture(run["path"], width=Inches(5.5))
                             except Exception:
                                 pr.add_run("[imagem]")
                 return True

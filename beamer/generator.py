@@ -30,6 +30,23 @@ from core.variables import resolve_all
 
 IMG_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.pdf')
 
+from pathlib import Path
+import re
+
+# Suporta "caminho;LxA" (em milímetros)
+def _parse_img_spec(s: str):
+    """Parse 'path;LxA' -> (path, L, A) em mm; ou (path, None, None) se não houver tamanho."""
+    if not isinstance(s, str):
+        return s, None, None
+    if ';' in s:
+        path, size = s.split(';', 1)
+        m = re.match(r'^\s*(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)\s*$', size.strip())
+        if m:
+            return path.strip(), float(m.group(1)), float(m.group(2))
+        return path.strip(), None, None
+    return s.strip(), None, None
+
+
 def _read_text_any(p: Path) -> str:
     b = p.read_bytes()
     for enc in ("utf-8", "utf-8-sig", "cp1252", "latin1"):
@@ -62,7 +79,7 @@ def _label(i: int) -> str:
     return abc[i] + ")" if i < len(abc) else f"{i+1})"
 
 def _is_image_path(x: str) -> bool:
-    p, _, _ = _parse_img_spec(x)
+    p, _, _ = _parse_img_spec(x) if isinstance(x, str) else (x, None, None)
     return isinstance(p, str) and any(p.lower().endswith(ext) for ext in IMG_EXTS)
 
 def _alts_with_correct(q: Dict[str, Any]) -> List[str]:
@@ -92,9 +109,7 @@ def render_images(imgs: List[str], base_dir: str | None = None) -> str:
         return ""
     lines = [r"\begin{center}"]
     for img in imgs:
-        p = Path(base_dir, img) if base_dir else Path(img)
-        if p.exists():
-            spec_p, wmm, hmm = _parse_img_spec(img)
+        spec_p, wmm, hmm = _parse_img_spec(img)
         p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
         if p.exists():
             if wmm and hmm:
@@ -148,7 +163,7 @@ def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
     for i, alt in enumerate(alts):
         label = _label(i)
         if _is_image_path(alt or ""):
-            spec_p, wmm, hmm = _parse_img_spec(alt or "")
+            spec_p, wmm, hmm = _parse_img_spec(alt)
             p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
             if p.exists():
                 if wmm and hmm:
