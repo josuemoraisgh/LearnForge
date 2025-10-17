@@ -5,7 +5,7 @@ Geração de slides Beamer a partir de JSON de questões.
 Padrões aplicados:
 - Preâmbulo conforme template (beamer + Madrid, etc.) com mapeamento Unicode.
 - Ordena por id; título do frame: "<id>) <enunciado>".
-- Dois frames por questão: (1) sem gabarito; (2) com gabarito (\alert{...}).
+- Dois frames por questão: (1) sem gabarito; (2) com gabarito (\\alert{...}).
 - Frame adicional de OBS. quando houver.
 - Alternativas sempre a), b), c), d).
 - Tipo 4: afirmativas em linha única "I. ...; II. ...; ..." (escapadas e com \par).
@@ -62,7 +62,8 @@ def _label(i: int) -> str:
     return abc[i] + ")" if i < len(abc) else f"{i+1})"
 
 def _is_image_path(x: str) -> bool:
-    return isinstance(x, str) and any(x.lower().endswith(ext) for ext in IMG_EXTS)
+    p, _, _ = _parse_img_spec(x)
+    return isinstance(p, str) and any(p.lower().endswith(ext) for ext in IMG_EXTS)
 
 def _alts_with_correct(q: Dict[str, Any]) -> List[str]:
     """
@@ -93,7 +94,13 @@ def render_images(imgs: List[str], base_dir: str | None = None) -> str:
     for img in imgs:
         p = Path(base_dir, img) if base_dir else Path(img)
         if p.exists():
-            lines.append(rf"\includegraphics[width=0.9\linewidth]{{{p.as_posix()}}}")
+            spec_p, wmm, hmm = _parse_img_spec(img)
+        p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
+        if p.exists():
+            if wmm and hmm:
+                lines.append(rf"\includegraphics[width={wmm}mm,height={hmm}mm]{{{p.as_posix()}}}")
+            else:
+                lines.append(rf"\includegraphics[width=0.9\linewidth]{{{p.as_posix()}}}")
         else:
             lines.append(r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
     lines.append(r"\end{center}")
@@ -101,7 +108,7 @@ def render_images(imgs: List[str], base_dir: str | None = None) -> str:
 
 def render_afirmacoes_line(afirm: Dict[str, str]) -> str:
     """
-    Linha única 'I. ...; II. ...; ...' escapada e precedida de \par.
+    Linha única 'I. ...; II. ...; ...' escapada e precedida de par.
     Ordem fixa I, II, III… (sem embaralhar).
     """
     if not afirm:
@@ -115,7 +122,7 @@ def render_afirmacoes_line(afirm: Dict[str, str]) -> str:
 
 def render_alts_text(alts: List[str], correta: str, highlight: bool = False) -> str:
     """
-    Alternativas em texto, rotuladas como a), b), c)…; se highlight=True, correta em \alert{...}.
+    Alternativas em texto, rotuladas como a), b), c)…; se highlight=True, correta em \\alert{...}.
     """
     if not alts:
         return ""
@@ -133,7 +140,7 @@ def render_alts_text(alts: List[str], correta: str, highlight: bool = False) -> 
 def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
     """
     Alternativas com imagens, rotuladas como a), b), c)…; se a imagem não existir, mostra quadro vazio.
-    (Para imagens não aplicamos highlight via \alert.)
+    (Para imagens não aplicamos highlight via \\alert.)
     """
     if not alts:
         return ""
@@ -141,9 +148,13 @@ def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
     for i, alt in enumerate(alts):
         label = _label(i)
         if _is_image_path(alt or ""):
-            p = Path(base_dir, alt) if base_dir else Path(alt)
+            spec_p, wmm, hmm = _parse_img_spec(alt or "")
+            p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
             if p.exists():
-                lines.append(r"\item[" + label + "] " + rf"\includegraphics[width=0.75\linewidth]{{{p.as_posix()}}}")
+                if wmm and hmm:
+                    lines.append(r"\item[" + label + "] " + rf"\includegraphics[width={wmm}mm,height={hmm}mm]{{{p.as_posix()}}}")
+                else:
+                    lines.append(r"\item[" + label + "] " + rf"\includegraphics[width=0.75\linewidth]{{{p.as_posix()}}}")
             else:
                 lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
         else:
@@ -234,6 +245,29 @@ def json2beamer(
         "% Espaços especiais\n"
         "\\DeclareUnicodeCharacter{00A0}{~}\n"                          # NBSP
         "\\DeclareUnicodeCharacter{202F}{\\,}\n"                        # NNBSP -> espaço fino
+        "% Sobrescritos Unicode comuns em unidades\n"
+        "\\DeclareUnicodeCharacter{207B}{\\ensuremath{^{-}}}\n"         # ⁻ (superscript minus)
+        "\\DeclareUnicodeCharacter{2070}{\\ensuremath{^{0}}}\n"
+        "\\DeclareUnicodeCharacter{00B9}{\\ensuremath{^{1}}}\n"         # ¹
+        "\\DeclareUnicodeCharacter{00B2}{\\ensuremath{^{2}}}\n"         # ²
+        "\\DeclareUnicodeCharacter{00B3}{\\ensuremath{^{3}}}\n"         # ³
+        "\\DeclareUnicodeCharacter{2074}{\\ensuremath{^{4}}}\n"
+        "\\DeclareUnicodeCharacter{2075}{\\ensuremath{^{5}}}\n"
+        "\\DeclareUnicodeCharacter{2076}{\\ensuremath{^{6}}}\n"
+        "\\DeclareUnicodeCharacter{2077}{\\ensuremath{^{7}}}\n"
+        "\\DeclareUnicodeCharacter{2078}{\\ensuremath{^{8}}}\n"
+        "\\DeclareUnicodeCharacter{2079}{\\ensuremath{^{9}}}\n"
+        "% Subscritos (U+2080..U+2089) — caso apareçam\n"
+        "\\DeclareUnicodeCharacter{2080}{\\ensuremath{_{0}}}\n"
+        "\\DeclareUnicodeCharacter{2081}{\\ensuremath{_{1}}}\n"
+        "\\DeclareUnicodeCharacter{2082}{\\ensuremath{_{2}}}\n"
+        "\\DeclareUnicodeCharacter{2083}{\\ensuremath{_{3}}}\n"
+        "\\DeclareUnicodeCharacter{2084}{\\ensuremath{_{4}}}\n"
+        "\\DeclareUnicodeCharacter{2085}{\\ensuremath{_{5}}}\n"
+        "\\DeclareUnicodeCharacter{2086}{\\ensuremath{_{6}}}\n"
+        "\\DeclareUnicodeCharacter{2087}{\\ensuremath{_{7}}}\n"
+        "\\DeclareUnicodeCharacter{2088}{\\ensuremath{_{8}}}\n"
+        "\\DeclareUnicodeCharacter{2089}{\\ensuremath{_{9}}}\n"                
         "\\title{" + latex_escape(title) + "}\n"
         "\\author{}\n"
         "\\date{}\n"

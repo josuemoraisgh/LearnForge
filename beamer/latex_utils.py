@@ -3,6 +3,18 @@
 from __future__ import annotations
 from typing import List, Dict, Any
 from pathlib import Path
+import re
+
+def _parse_img_spec(s: str):
+    if not isinstance(s, str):
+        return s, None, None
+    if ';' in s:
+        path, size = s.split(';',1)
+        m = re.match(r'^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$', size.strip())
+        if m:
+            return path.strip(), float(m.group(1)), float(m.group(2))
+        return path.strip(), None, None
+    return s.strip(), None, None
 
 IMG_EXTS = ('.png','.jpg','.jpeg','.gif','.bmp','.svg','.pdf')
 
@@ -25,9 +37,25 @@ def _label(i: int) -> str:
 def render_images(imgs: List[str], base_dir: str|None=None) -> str:
     lines = [r"\begin{center}"]
     from pathlib import Path
+import re
+
+def _parse_img_spec(s: str):
+    if not isinstance(s, str):
+        return s, None, None
+    if ';' in s:
+        path, size = s.split(';',1)
+        m = re.match(r'^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$', size.strip())
+        if m:
+            return path.strip(), float(m.group(1)), float(m.group(2))
+        return path.strip(), None, None
+    return s.strip(), None, None
     for img in imgs or []:
-        p = Path(base_dir, img) if base_dir else Path(img)
+        spec_p, wmm, hmm = _parse_img_spec(img)
+        p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
         if p.exists():
+            if wmm and hmm:
+            lines.append(rf"\includegraphics[width={wmm}mm,height={hmm}mm]{{{p.as_posix()}}}")
+        else:
             lines.append(rf"\includegraphics[width=0.9\linewidth]{{{p.as_posix()}}}")
         else:
             # quadro vazio 6x4 cm
@@ -66,8 +94,12 @@ def render_alts_images(alts: List[str], correta: str, base_dir: str|None=None) -
     lines = [r"\begin{itemize}"]
     for i, alt in enumerate(alts or []):
         label = _label(i)
-        p = Path(base_dir, alt) if base_dir else Path(alt)
+        spec_p, wmm, hmm = _parse_img_spec(alt)
+        p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
         if p.exists():
+            if wmm and hmm:
+            lines.append(r"\item[" + label + "] " + rf"\includegraphics[width={wmm}mm,height={hmm}mm]{{{p.as_posix()}}}")
+        else:
             lines.append(r"\item[" + label + "] " + rf"\includegraphics[width=0.75\linewidth]{{{p.as_posix()}}}")
         else:
             lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")

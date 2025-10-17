@@ -7,10 +7,25 @@ import json, random
 from docx import Document
 from docx.shared import Inches
 
+def mm_to_inches(mm):
+    return (mm or 0) / 25.4
+
 # >>> Resolver do Tipo 3 (variáveis, resoluções e substituições <...>)
 from core.variables import resolve_all
 
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".pdf")
+
+def _parse_img_spec(s: str):
+    if not isinstance(s, str):
+        return s, None, None
+    if ';' in s:
+        path, size = s.split(';',1)
+        import re
+        m = re.match(r'^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$', size.strip())
+        if m:
+            return path.strip(), float(m.group(1)), float(m.group(2))
+        return path.strip(), None, None
+    return s.strip(), None, None
 
 def _read_text_any(p: Path) -> str:
     b = p.read_bytes()
@@ -167,7 +182,11 @@ def json2docx(
                             pr.add_run(run["text"])
                         elif run["type"] == "image":
                             try:
-                                pr.add_run().add_picture(run["path"], width=Inches(5.5))
+                                wmm = run.get("width_mm"); hmm = run.get("height_mm")
+                        if wmm and hmm:
+                            pr.add_run().add_picture(run["path"], width=Inches(mm_to_inches(wmm)), height=Inches(mm_to_inches(hmm)))
+                        else:
+                            pr.add_run().add_picture(run["path"], width=Inches(5.5))
                             except Exception:
                                 pr.add_run("[imagem]")
                 return True
@@ -183,7 +202,11 @@ def json2docx(
                     pr.add_run(run["text"])
                 elif run["type"] == "image":
                     try:
-                        pr.add_run().add_picture(run["path"], width=Inches(5.5))
+                        wmm = run.get("width_mm"); hmm = run.get("height_mm")
+                        if wmm and hmm:
+                            pr.add_run().add_picture(run["path"], width=Inches(mm_to_inches(wmm)), height=Inches(mm_to_inches(hmm)))
+                        else:
+                            pr.add_run().add_picture(run["path"], width=Inches(5.5))
                     except Exception:
                         pr.add_run("[imagem]")
 

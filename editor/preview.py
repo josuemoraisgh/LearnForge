@@ -1,6 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import List, Dict, Any
+import re
+
+def _parse_img_spec(s: str):
+    if not isinstance(s, str):
+        return s, None, None
+    if ';' in s:
+        path, size = s.split(';',1)
+        m = re.match(r'^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$', size.strip())
+        if m:
+            return path.strip(), float(m.group(1)), float(m.group(2))
+        return path.strip(), None, None
+    return s.strip(), None, None
 
 def preview_text(questions: List[Dict[str, Any]], title: str|None=None, **kwargs) -> str:
     """
@@ -48,8 +60,11 @@ def preview_text(questions: List[Dict[str, Any]], title: str|None=None, **kwargs
             label = alph[i] + ")" if i < len(alph) else f"{i+1})"
             s = str(alt or "")
             # se parecer imagem, no preview mostro só um marcador textual
-            if s.lower().endswith((".png",".jpg",".jpeg",".gif",".bmp",".svg",".pdf")):
-                s = f"[imagem: {s}]"
+            p,_w,_h = _parse_img_spec(s)
+            if p.lower().endswith((".png",".jpg",".jpeg",".gif",".bmp",".svg",".pdf")):
+                p,w,h = _parse_img_spec(s)
+                size = f" {int(w)}x{int(h)}mm" if (w and h) else ""
+                s = f"[imagem: {p}{size}]"
             lines.append(f"   {label} {s}")
 
         lines.append("")  # linha em branco entre questões
