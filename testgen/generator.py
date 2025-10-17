@@ -10,23 +10,26 @@ from docx.shared import Inches
 def mm_to_inches(mm: float) -> float:
     return (mm or 0) / 25.4
 
+IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".pdf")
+
 def _parse_img_spec(s: str):
-    """Parse 'path;LxA' -> (path, L, A) in mm; or (path, None, None)."""
+    """Parse 'path;LxA' -> (path, L, A) em mm; (path, None, None) se sem tamanho."""
     if not isinstance(s, str):
         return s, None, None
     if ';' in s:
         path, size = s.split(';',1)
         import re
-        m = re.match(r'^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$', size.strip())
+        m = re.match(r'^\s*(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)\s*$', size.strip())
         if m:
             return path.strip(), float(m.group(1)), float(m.group(2))
         return path.strip(), None, None
     return s.strip(), None, None
 
-# >>> Resolver do Tipo 3 (variáveis, resoluções e substituições <...>)
-from core.variables import resolve_all
-
-IMG_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".pdf")
+def _is_image_path(s: str) -> bool:
+    if not isinstance(s, str):
+        return False
+    p = s.split(';',1)[0].strip()
+    return any(p.lower().endswith(ext) for ext in IMG_EXTS)
 
 def _read_text_any(p: Path) -> str:
     b = p.read_bytes()
@@ -45,9 +48,6 @@ def _load_json_list(p: str) -> List[Dict[str, Any]]:
     for q in data:
         q.setdefault("_base_dir", base)
     return data
-
-def _is_image_path(x: str) -> bool:
-    return isinstance(x, str) and any(x.lower().endswith(ext) for ext in IMG_EXTS)
 
 def _alts_with_correct(q: Dict[str, Any]) -> List[str]:
     """Garante a presença da correta e remove duplicatas preservando a ordem."""
@@ -80,6 +80,16 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
     - Alternativas rotuladas a), b), c)...
     - Tipo 2: insere imagem; se faltar, usa placeholder.
     """
+    # Imagens do enunciado
+    imgs = q.get("imagens") or []
+    for img in imgs:
+        spec_p, wmm, hmm = _parse_img_spec(img)
+        p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
+        if p.exists():
+            runs.append({"type":"image","path": str(p), "width_mm": wmm, "height_mm": hmm})
+        else:
+            runs.append({"type":"text","text": "[imagem]\n"})
+    
     runs: List[Dict[str, Any]] = []
     alph = "abcdefghijklmnopqrstuvwxyz"
     base_dir = q.get("_base_dir")
@@ -105,7 +115,7 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
             if p.exists():
                 runs.append({"type":"image","path": str(p), "width_mm": wmm, "height_mm": hmm})
             else:
-                runs.append({"type":"image","path": placeholder})
+                runs.append({"type":"text","text": "[imagem]\n"})
             runs.append({"type":"text","text": "\n"})
         else:
             runs.append({"type":"text","text": f"  {label} {s}\n"})
@@ -186,7 +196,9 @@ def json2docx(
                             try:
                                 wmm = run.get("width_mm"); hmm = run.get("height_mm")
                                 if wmm and hmm:
-                                    pr.add_run().add_picture(run["path"], width=Inches(mm_to_inches(wmm)), height=Inches(mm_to_inches(hmm)))
+                                    pr.add_run().add_picture(run["path"],
+                                        width=Inches(mm_to_inches(wmm)),
+                                        height=Inches(mm_to_inches(hmm)))
                                 else:
                                     pr.add_run().add_picture(run["path"], width=Inches(5.5))
                             except Exception:

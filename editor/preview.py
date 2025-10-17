@@ -4,53 +4,46 @@ from typing import List, Dict, Any
 import re
 
 def _parse_img_spec(s: str):
-    """Parse 'path;LxA' -> (path, L, A) in mm; or (path, None, None)."""
+    """Parse 'path;LxA' -> (path, L, A) em mm; ou (path, None, None) se não houver tamanho."""
     if not isinstance(s, str):
         return s, None, None
     if ';' in s:
         path, size = s.split(';',1)
-        import re
-        m = re.match(r'^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$', size.strip())
+        m = re.match(r'^\s*(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)\s*$', size.strip())
         if m:
             return path.strip(), float(m.group(1)), float(m.group(2))
         return path.strip(), None, None
     return s.strip(), None, None
 
-
-
 def preview_text(questions: List[Dict[str, Any]], title: str|None=None, **kwargs) -> str:
     """
     Preview unificado:
-    - Ordena por id (id mostrado antes do enunciado)
-    - Tipo 3: resolve <VAR>, <RES> e expressões (<TEMP + 1>, etc.)
-    - Tipo 4: mostra linha "I. ...; II. ...; ..." (sem embaralhar)
-    - Alternativas sempre a), b), c), d)
-    - Imagem nas alternativas: mostra "[imagem: caminho]" no preview
+    - Ordena por id
+    - Tipo 3: resolve <VAR>, <RES>, expressões
+    - Tipo 4: linha "I. ...; II. ...; ..."
+    - Alternativas a), b), c)...
+    - Para imagens, mostra marcador: [imagem: caminho LxAmm]
     """
     from core.variables import resolve_all
-    # seed opcional para bater com Beamer/Prova quando informado
     seed = kwargs.get("seed", None)
-
-    # 1) ordena por id
-    try:
-        questions = sorted(questions, key=lambda q: int(q.get("id", 0)))
-    except Exception:
-        pass
-
     alph = "abcdefghijklmnopqrstuvwxyz"
     lines: List[str] = []
-    if title:
-        lines += [title, "-"*max(8, len(title))]
 
-    for q in questions:
-        # 2) resolve variáveis/resoluções e substitui em todos os campos (Tipo 3)
-        q_res, _env = resolve_all(q, seed=seed)
+    qs = sorted(questions or [], key=lambda q: int(q.get("id", 0)))
+    for q in qs:
+        q_res, _ = resolve_all(q, seed=seed)
 
-        qid = q_res.get("id", "?")
-        enun = str(q_res.get("enunciado", "") or "").strip()
-        lines.append(f"{qid}) {enun}")
+        # Título
+        lines.append(f"{q_res.get('id','?')}) {q_res.get('enunciado','').strip()}")
 
-        # 3) Tipo 4: linha de afirmativas (I; II; III; ...) SEM embaralhar
+        # IMAGENS do enunciado (campo "imagens")
+        imgs = q_res.get("imagens") or []
+        for img in imgs:
+            p, w, h = _parse_img_spec(str(img))
+            size = f" {int(w)}x{int(h)}mm" if (w and h) else ""
+            lines.append(f"   [imagem: {p}{size}]")
+
+        # Tipo 4 (afirmativas) — linha única
         afirm = q_res.get("afirmacoes") or {}
         if isinstance(afirm, dict) and afirm:
             order = ["I","II","III","IV","V","VI","VII","VIII","IX","X"]
@@ -58,19 +51,19 @@ def preview_text(questions: List[Dict[str, Any]], title: str|None=None, **kwargs
             if labeled:
                 lines.append("   " + "; ".join(labeled))
 
-        # 4) Alternativas: a), b), c) ...
+        # Alternativas
         alts = q_res.get("alternativas") or []
         for i, alt in enumerate(alts):
             label = alph[i] + ")" if i < len(alph) else f"{i+1})"
             s = str(alt or "")
-            # se parecer imagem, no preview mostro só um marcador textual
-            p,_w,_h = _parse_img_spec(s)
-            if p.lower().endswith((".png",".jpg",".jpeg",".gif",".bmp",".svg",".pdf")):
-                p,w,h = _parse_img_spec(s)
+            p, w, h = _parse_img_spec(s)
+            if isinstance(p, str) and p.lower().endswith((".png",".jpg",".jpeg",".gif",".bmp",".svg",".pdf")):
                 size = f" {int(w)}x{int(h)}mm" if (w and h) else ""
-                s = f"[imagem: {p}{size}]"
-            lines.append(f"   {label} {s}")
+                s_view = f"[imagem: {p}{size}]"
+            else:
+                s_view = s
+            lines.append(f"   {label} {s_view}")
 
-        lines.append("")  # linha em branco entre questões
+        lines.append("")  # separador
 
     return "\n".join(lines)
