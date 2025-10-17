@@ -1,0 +1,165 @@
+name: windows-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag (ex.: v1.2.3). Se vazio, será gerada automaticamente.'
+        required: false
+        default: ''
+      tag_prefix:
+        description: 'Prefixo do tag quando for gerado automaticamente'
+        required: false
+        default: 'v'
+      prerelease:
+        description: 'Marcar release como pré-release?'
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    env:
+      APP_NAME: LearnForge
+      ENTRYPOINT: main.py
+      PYTHON_VERSION: '3.12'
+      DIST_DIR: dist
+      TEX_OUTDIR: tex
+      # pastas empacotadas no executável (SRC;DEST) — uma por linha
+      ADD_DATA_DIRS: >
+        assets;assets
+        beamer;beamer
+        core;core
+        editor;editor
+        testgen;testgen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies (Py + PyInstaller)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.10.0
+
+      - name: Compute version/tag
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref }}"
+          $refName = "${{ github.ref_name }}"
+          $dispatchTag = "${{ github.event.inputs.tag }}"
+          $prefix = "${{ github.event.inputs.tag_prefix }}"
+          if (-not $prefix) { $prefix = "v" }
+
+          if ($ref -like "refs/tags/*") {
+            $tag = $refName
+          } elseif ($dispatchTag) {
+            $tag = $dispatchTag
+          } else {
+            $stamp = (Get-Date -Format "yyyy.MM.dd.HHmm")
+            $tag = "$prefix$stamp"
+          }
+
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "version=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build EXE with PyInstaller
+        shell: pwsh
+        run: |
+          $name = "${{ env.APP_NAME }}"
+          $entry = "${{ env.ENTRYPOINT }}"
+          $datas = @()
+          "${{ env.ADD_DATA_DIRS }}".Split("`n") | ForEach-Object {
+            $line = $_.Trim()
+            if ($line) { $datas += "--add-data `"$line`"" }
+          }
+          $hidden = @(
+            "--hidden-import lxml._elementpath",
+            "--hidden-import docx.opc.constants",
+            "--hidden-import docx.oxml",
+            "--hidden-import docx.oxml.ns",
+            "--hidden-import docx.oxml.parser"
+          )
+          pyinstaller --noconfirm --clean `
+            --name "$name" `
+            --onefile `
+            --windowed `
+            $hidden `
+            $datas `
+            "$entry"
+
+      # ---------- Tectonic (LaTeX engine portátil) ----------
+      - name: Install Chocolatey (for Tectonic)
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+          Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+      - name: Install Tectonic
+        shell: pwsh
+        run: |
+          choco install tectonic --yes --no-progress
+          $tect = (Get-ChildItem 'C:\ProgramData\chocolatey\bin\tectonic.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $tect) { throw "tectonic.exe not found by choco." }
+          echo "TECTONIC_BIN=$tect" >> $env:GITHUB_ENV
+
+      - name: Prepare bundle (EXE + tectonic)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bundle | Out-Null
+          Copy-Item -Path (Join-Path "${{ env.DIST_DIR }}" "${{ env.APP_NAME }}.exe") -Destination bundle/
+
+          # Copia tectonic.exe para bundle/tex/
+          New-Item -ItemType Directory -Force -Path (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}') | Out-Null
+          Copy-Item -Path "${{ env.TECTONIC_BIN }}" -Destination (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}')
+
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          $zipName = "${{ env.APP_NAME }}-${{ steps.ver.outputs.version }}-win64.zip"
+          Compress-Archive -Path bundle\* -DestinationPath $zipName
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Move-Item $zipName artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows-${{ steps.ver.outputs.version }}
+          path: artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create/Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ env.APP_NAME }} ${{ steps.ver.outputs.version }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' }}
+          files: artifacts/*.zip
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
