@@ -3,37 +3,78 @@
 Geração de slides Beamer a partir de JSON de questões.
 
 Padrões aplicados:
-- Preâmbulo conforme template (beamer + Madrid, etc.) com mapeamento Unicode.
+- Preâmbulo (beamer + Madrid) com widescreen e mapeamento Unicode.
 - Ordena por id; título do frame: "<id>) <enunciado>".
-- Dois frames por questão: (1) sem gabarito; (2) com gabarito (\\alert{...}).
-- Frame adicional de OBS. quando houver.
-- Alternativas sempre a), b), c), d).
-- Tipo 4: afirmativas em linha única "I. ...; II. ...; ..." (escapadas e com \\par).
-- Tipo 2: alternativas por imagem; se arquivo não existir (relativo ao JSON), desenha um quadro vazio.
-- Caminhos de imagem sempre relativos ao diretório do JSON.
-
-Compatível com a GUI:
-json2beamer(input_json, output_tex, shuffle_seed, title, fsq, fsa, alert_color, **kwargs)
+- Dois frames por questão: (1) sem gabarito; (2) com gabarito (\alert{...}).
+- OBS. em frame adicional quando houver.
+- Alternativas sempre a), b), c), ...
+- Tipo 4: afirmativas uma por linha (itemize).
+- Tipo 2: alternativas por imagem; se não existir arquivo, desenha quadro vazio.
+- Caminhos de imagem relativos ao diretório do JSON.
+- Suporte a imagens com "caminho;LxA" (mm) no enunciado e nas alternativas.
+- Suporte a "alternativas;K" (K = colunas da 1ª linha) — usando SEMPRE a lista final de
+  alternativas em q_res["alternativas"] (merge + aleatoriedade feitos no pipeline).
 """
 
 from __future__ import annotations
 from typing import List, Dict, Any
 from pathlib import Path
 import json
+import re
 
-# Importa o resolvedor do Tipo 3 (variáveis, resoluções e substituições <...>)
+# resolvedor (Tipo 3: variáveis, resoluções e substituições <...>)
 from core.variables import resolve_all
 
 # --------------------------------------------------------------------
-# Helpers internos
+# Helpers
 # --------------------------------------------------------------------
 
 IMG_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.pdf')
 
-from pathlib import Path
-import re
+def _alternativas_firstrow(q: Dict[str, Any]) -> int | None:
+    """
+    Lê 'alternativas;K' (se existir) e retorna K; caso contrário None.
+    Usado apenas como metadado de layout (nunca para pegar a lista).
+    """
+    for k in q.keys():
+        if isinstance(k, str) and k.startswith("alternativas;"):
+            try:
+                return int(k.split(";", 1)[1])
+            except Exception:
+                return None
+    return None
 
-# Suporta "caminho;LxA" (em milímetros)
+def _alts_final(q: Dict[str, Any]) -> List[str]:
+    """
+    Retorna a lista FINAL de alternativas (merge + aleatoriedade) do pipeline:
+    - Prioriza q["alternativas"]
+    - Se não existir, cai para a primeira 'alternativas;K'
+    - Garante presença da 'correta' se por algum motivo ela não estiver
+    """
+    alts = None
+    if isinstance(q.get("alternativas"), list):
+        alts = list(q.get("alternativas") or [])
+    if alts is None:
+        for k, v in q.items():
+            if isinstance(k, str) and k.startswith("alternativas;") and isinstance(v, list):
+                alts = list(v or [])
+                break
+    if alts is None:
+        alts = []
+    cor = (q.get("correta") or "").strip()
+    if cor and not any((a or "").strip() == cor for a in alts):
+        alts.append(cor)
+    # remove duplicatas preservando ordem
+    seen, out = set(), []
+    for a in alts:
+        key = (a or "").strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(a)
+    return out
+
+# "caminho;LxA" (mm)
 def _parse_img_spec(s: str):
     """Parse 'path;LxA' -> (path, L, A) em mm; ou (path, None, None) se não houver tamanho."""
     if not isinstance(s, str):
@@ -45,7 +86,6 @@ def _parse_img_spec(s: str):
             return path.strip(), float(m.group(1)), float(m.group(2))
         return path.strip(), None, None
     return s.strip(), None, None
-
 
 def _read_text_any(p: Path) -> str:
     b = p.read_bytes()
@@ -72,7 +112,10 @@ def latex_escape(s: str) -> str:
         "~": r"\textasciitilde{}",
         "^": r"\textasciicircum{}",
     }
-    return "".join(repl.get(ch, ch) for ch in s)
+    out = "".join(repl.get(ch, ch) for ch in s)
+    # trata < e > (evita mojibake/inversões)
+    out = out.replace("<", r"\textless{}").replace(">", r"\textgreater{}")
+    return out
 
 def _label(i: int) -> str:
     abc = "abcdefghijklmnopqrstuvwxyz"
@@ -81,25 +124,6 @@ def _label(i: int) -> str:
 def _is_image_path(x: str) -> bool:
     p, _, _ = _parse_img_spec(x) if isinstance(x, str) else (x, None, None)
     return isinstance(p, str) and any(p.lower().endswith(ext) for ext in IMG_EXTS)
-
-def _alts_with_correct(q: Dict[str, Any]) -> List[str]:
-    """
-    Garante que a alternativa correta esteja na lista (se não estiver),
-    removendo duplicatas e preservando ordem.
-    """
-    alts = list(q.get("alternativas") or [])
-    cor = (q.get("correta") or "").strip()
-    if cor and not any((a or "").strip() == cor for a in alts):
-        alts.append(cor)
-    seen = set()
-    out = []
-    for a in alts:
-        key = (a or "").strip()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(a)
-    return out
 
 def render_images(imgs: List[str], base_dir: str | None = None) -> str:
     """
@@ -123,9 +147,7 @@ def render_images(imgs: List[str], base_dir: str | None = None) -> str:
 
 def render_afirmacoes_line(afirm: Dict[str, str]) -> str:
     """
-    Renderiza as afirmativas (Tipo 4) em múltiplas linhas (lista itemize),
-    mantendo a mesma assinatura para compatibilidade com os chamadores.
-    Ordem fixa I, II, III… (sem embaralhar).
+    Tipo 4: afirmativas em múltiplas linhas (itemize). Ordem fixa I..X.
     """
     if not afirm:
         return ""
@@ -133,18 +155,12 @@ def render_afirmacoes_line(afirm: Dict[str, str]) -> str:
     itens = [f"{k}. {afirm[k]}" for k in order if k in afirm]
     if not itens:
         return ""
-
-    # Escapa LaTeX e monta como lista
-    safe_items = [latex_escape(x) for x in itens]
-    lines = [r"\begin{itemize}"]
-    lines += [r"\item " + s for s in safe_items]
-    lines += [r"\end{itemize}"]
-    return "\n".join(lines)
-
+    safe = [latex_escape(x) for x in itens]
+    return "\n".join([r"\begin{itemize}"] + [r"\item " + s for s in safe] + [r"\end{itemize}"])
 
 def render_alts_text(alts: List[str], correta: str, highlight: bool = False) -> str:
     """
-    Alternativas em texto, rotuladas como a), b), c)…; se highlight=True, correta em \\alert{...}.
+    Alternativas em texto, rotuladas a), b), c) ...; se highlight=True, \alert{correta}.
     """
     if not alts:
         return ""
@@ -161,8 +177,7 @@ def render_alts_text(alts: List[str], correta: str, highlight: bool = False) -> 
 
 def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
     """
-    Alternativas com imagens, rotuladas como a), b), c)…; se a imagem não existir, mostra quadro vazio.
-    (Para imagens não aplicamos highlight via \\alert.)
+    Alternativas com imagens; rótulo a), b), c)…; se imagem não existir, quadro vazio.
     """
     if not alts:
         return ""
@@ -180,12 +195,73 @@ def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
             else:
                 lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
         else:
-            # Alternativa declarada como não-imagem em uma questão do tipo 2:
-            # ainda assim mostramos um quadro (com rótulo), conforme orientação.
             lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
     lines.append(r"\end{itemize}")
     return "\n".join(lines)
 
+def render_alts_grid_beamer_from_list(
+    alts: List[str],
+    correta: str,
+    K: int | None,
+    base_dir: str | None,
+    highlight_correct: bool = False,
+) -> str:
+    """
+    Renderiza 'alts' (lista final) em 2 linhas: 1ª com K colunas; 2ª com o restante.
+    Mantém a ordem; rótulos a), b), c)...; se highlight_correct=True, aplica \alert
+    APENAS no conteúdo textual da alternativa correta (nunca no label).
+    """
+    if not alts or not isinstance(K, int) or K <= 0 or K >= len(alts):
+        return ""
+
+    n = len(alts)
+    first, rest = K, n - K
+    labels = [_label(i) for i in range(n)]
+    cor = (str(correta) or "").strip()
+
+    def _is_correct(a: str) -> bool:
+        return highlight_correct and bool(cor) and (str(a).strip() == cor)
+
+    def _cell(i: int) -> str:
+        a = alts[i]
+        lab = labels[i]
+
+        # Se for imagem ("path[;LxA]"), não aplicamos \alert (apenas centralizamos)
+        if _is_image_path(a or ""):
+            spec_p, wmm, hmm = _parse_img_spec(a)
+            p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
+            if p.exists():
+                if wmm and hmm:
+                    content = rf"\includegraphics[width={wmm}mm,height={hmm}mm]{{{p.as_posix()}}}"
+                else:
+                    content = rf"\includegraphics[width=0.9\linewidth]{{{p.as_posix()}}}"
+            else:
+                content = r"\fbox{\rule{0pt}{2.5cm}\rule{3.5cm}{0pt}}"
+
+            # label normal, conteúdo sem alert
+            return r"\centering " + lab + " " + content
+
+        # Texto: aplica \alert apenas no texto quando for a correta
+        text = latex_escape(str(a))
+        if _is_correct(a):
+            text = r"\alert{" + text + "}"
+
+        return r"\centering " + lab + " " + text
+
+    parts: List[str] = []
+    # Primeira linha (K colunas)
+    parts.append(r"\begin{tabularx}{\linewidth}{" + ("C" * first) + r"}")
+    parts.append(" & ".join(_cell(i) for i in range(0, first)) + r" \\")
+    parts.append(r"\end{tabularx}")
+
+    # Segunda linha (restante)
+    if rest > 0:
+        parts.append(r"\vspace{0.6em}")
+        parts.append(r"\begin{tabularx}{\linewidth}{" + ("C" * rest) + r"}")
+        parts.append(" & ".join(_cell(first + j) for j in range(0, rest)) + r" \\")
+        parts.append(r"\end{tabularx}")
+
+    return "\n".join(parts)
 # --------------------------------------------------------------------
 # Gerador principal
 # --------------------------------------------------------------------
@@ -200,7 +276,7 @@ def _load_json_list(p: str) -> List[Dict[str, Any]]:
 def json2beamer(
     input_json='assets/questoes_template.json',
     output_tex='assets/questoes_template_slides.tex',
-    shuffle_seed=None,             # não embaralhamos no Beamer; usado como seed do resolver T3
+    shuffle_seed=None,             # seed do resolver T3 (não embaralhamos no Beamer)
     title='Exercícios – Apresentação',
     fsq='Large',
     fsa='normalsize',
@@ -225,13 +301,13 @@ def json2beamer(
         qs = _load_json_list(input_json)
         base_dir = str(Path(input_json).parent.resolve())
 
-    # Ordenar por id
+    # Ordenar por id (robusto)
     try:
         qs = sorted(qs, key=lambda q: int(q.get("id", 0)))
     except Exception:
         pass
 
-    # PREÂMBULO com mapeamento Unicode necessário ao pdfLaTeX
+    # PREÂMBULO com widescreen e Unicode
     preamble = (
         "\\documentclass[aspectratio=169]{beamer}\n"
         "\\usepackage{bookmark}\n"
@@ -241,12 +317,17 @@ def json2beamer(
         "\\usetheme{Madrid}\n"
         "\\usepackage{graphicx}\n"
         "\\usepackage{enumitem}\n"
-        "% --- Unicode em pdfLaTeX ---\n"
-        "\\usepackage{newunicodechar}\n"
+        # Unicode / fontes
         "\\usepackage[T1]{fontenc}\n"
         "\\usepackage{lmodern}\n"
         "\\usepackage{textcomp}\n"
-        "\\usepackage{upquote}\n"        
+        "\\usepackage{upquote}\n"
+        # tabularx para grade invisível (carregar ANTES do newcolumntype)
+        "\\usepackage{array}\n"
+        "\\usepackage{tabularx}\n"
+        "\\newcolumntype{C}{>{\\centering\\arraybackslash}X}\n"
+        # (opcional) mapeamentos Unicode úteis
+        "\\usepackage{newunicodechar}\n"
         "% Grego minúsculo\n"
         "\\DeclareUnicodeCharacter{03B1}{\\ensuremath{\\alpha}}\n"      # α
         "\\DeclareUnicodeCharacter{03B2}{\\ensuremath{\\beta}}\n"       # β
@@ -308,7 +389,7 @@ def json2beamer(
     ]
 
     for q in qs:
-        # --- RESOLVE TIPO 3 (variáveis + resoluções + substituições <...>) ---
+        # --- resolve Tipo 3 (variáveis + resoluções + substituições <...>) ---
         q_res, _env = resolve_all(q, seed=shuffle_seed)
 
         qid = q_res.get("id", "?")
@@ -316,8 +397,8 @@ def json2beamer(
         enun_tex = latex_escape(enun)
         tipo = int(q_res.get("tipo", 1))
 
-        # Alternativas (no Beamer, sem embaralhar), garantindo correta presente
-        alts = _alts_with_correct(q_res)
+        # Alternativas (lista FINAL do pipeline, com garantia da correta presente)
+        alts = _alts_final(q_res)
 
         # Imagens do enunciado
         imgs = q_res.get("imagens") or []
@@ -332,17 +413,26 @@ def json2beamer(
 
         if q_res.get("afirmacoes"):
             parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
-            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas            
-            sub = (q.get("subenunciado") or "").strip()
+            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas
+            sub = (q_res.get("subenunciado") or "").strip()
             if sub:
                 parts.append(r"\medskip")
                 parts.append("{\\BodySize " + latex_escape(sub) + "}")
-                parts.append(r"\medskip")                     
+                parts.append(r"\medskip")
 
         if tipo == 2:
             parts.append(render_alts_images(alts, base_dir=base_dir))
         else:
-            parts.append(render_alts_text(alts, q_res.get('correta', ''), highlight=False))
+            # Lê K de 'alternativas;K' (apenas layout)
+            K = _alternativas_firstrow(q_res)
+            grid = render_alts_grid_beamer_from_list(
+                alts=alts,
+                correta=q_res.get('correta', ''),
+                K=K,
+                base_dir=base_dir,
+                highlight_correct=False
+            )
+            parts.append(grid if grid else render_alts_text(alts, q_res.get('correta', ''), highlight=False))
 
         parts.append("}")
         parts.append("\\end{frame}\n")
@@ -357,20 +447,26 @@ def json2beamer(
 
         if q_res.get("afirmacoes"):
             parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
-            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas            
-            sub = (q.get("subenunciado") or "").strip()
+            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas
+            sub = (q_res.get("subenunciado") or "").strip()
             if sub:
                 parts.append(r"\medskip")
                 parts.append("{\\BodySize " + latex_escape(sub) + "}")
-                parts.append(r"\medskip")              
+                parts.append(r"\medskip")
 
-        
         if tipo == 2:
-            # Para imagem, mantemos sem highlight; apenas repetimos as imagens/quadro
+            # Imagens: repetimos (sem highlight)
             parts.append(render_alts_images(alts, base_dir=base_dir))
         else:
-            # Para texto, destaca a correta
-            parts.append(render_alts_text(alts, q_res.get('correta', ''), highlight=True))
+            K = _alternativas_firstrow(q_res)
+            grid = render_alts_grid_beamer_from_list(
+                alts=alts,
+                correta=q_res.get('correta', ''),
+                K=K,
+                base_dir=base_dir,
+                highlight_correct=True
+            )
+            parts.append(grid if grid else render_alts_text(alts, q_res.get('correta', ''), highlight=True))
 
         parts.append("}")
         parts.append("\\end{frame}\n")
