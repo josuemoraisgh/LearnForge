@@ -1,21 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import List, Dict, Any
-
-def _alts_anykey(q: dict) -> tuple[list, int | None]:
-    \"\"\"Retorna (alternativas, first_row_cols) aceitando 'alternativas' ou 'alternativas;K'.
-    O preview por enquanto ignora K (layout permanece linear).\"\"\"
-    for k, v in q.items():
-        if isinstance(k, str) and k.startswith('alternativas'):
-            first = None
-            if ';' in k:
-                try:
-                    first = int(k.split(';', 1)[1])
-                except Exception:
-                    first = None
-            return (v or []), first
-    return (q.get('alternativas') or []), None
-
 import re
 
 def _parse_img_spec(s: str):
@@ -73,7 +58,7 @@ def preview_text(questions: List[Dict[str, Any]], title: str|None=None, **kwargs
                 lines.append(f"   {sub}")                    
 
         # Alternativas
-        alts, _first = _alts_anykey(q_res)
+        alts = q.get("alternativas") or []
         for i, alt in enumerate(alts):
             label = alph[i] + ")" if i < len(alph) else f"{i+1})"
             s = str(alt or "")

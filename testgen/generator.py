@@ -7,20 +7,6 @@ from core.variables import resolve_all  # <-- necessário para q_res, _env = res
 from docx import Document
 from docx.shared import Inches
 
-def _alts_anykey(q: dict) -> tuple[list, int | None]:
-    """Retorna (alternativas, first_row_cols) aceitando 'alternativas' ou 'alternativas;K'.
-    O DOCX por enquanto ignora K (layout permanece atual)."""
-    for k, v in q.items():
-        if isinstance(k, str) and k.startswith('alternativas'):
-            first = None
-            if ';' in k:
-                try:
-                    first = int(k.split(';', 1)[1])
-                except Exception:
-                    first = None
-            return (v or []), first
-    return (q.get('alternativas') or []), None
-
 def mm_to_inches(mm: float) -> float:
     return (mm or 0) / 25.4
 
@@ -130,7 +116,7 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
             runs.append({"type":"text","text": f"  {sub}\n\n"})
         
     # 4) Alternativas
-    alts, _first = _alts_anykey(q)
+    alts = q.get("alternativas") or []
     for i, alt in enumerate(alts):
         label = alph[i] + ")" if i < len(alph) else f"{i+1})"
         s = str(alt or "")
