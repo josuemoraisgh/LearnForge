@@ -19,30 +19,16 @@ Padrões aplicados:
 from __future__ import annotations
 from typing import List, Dict, Any
 from pathlib import Path
-import json
 import re
 
 # resolvedor (Tipo 3: variáveis, resoluções e substituições <...>)
-from core.variables import resolve_all
+from core import load_quiz
 
 # --------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------
 
 IMG_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.pdf')
-
-def _alternativas_firstrow(q: Dict[str, Any]) -> int | None:
-    """
-    Lê 'alternativas;K' (se existir) e retorna K; caso contrário None.
-    Usado apenas como metadado de layout (nunca para pegar a lista).
-    """
-    for k in q.keys():
-        if isinstance(k, str) and k.startswith("alternativas;"):
-            try:
-                return int(k.split(";", 1)[1])
-            except Exception:
-                return None
-    return None
 
 def _alts_final(q: Dict[str, Any]) -> List[str]:
     """
@@ -266,48 +252,62 @@ def render_alts_grid_beamer_from_list(
 # Gerador principal
 # --------------------------------------------------------------------
 
-def _load_json_list(p: str) -> List[Dict[str, Any]]:
-    text = _read_text_any(Path(p))
-    data = json.loads(text)
-    if not isinstance(data, list):
-        raise ValueError(f"{p}: o JSON deve ser um array de questões.")
-    return data
+def _load_json_list(p: str) -> list[dict]:
+    return load_quiz(p).get('questions', [])
 
 def json2beamer(
     input_json='assets/questoes_template.json',
     output_tex='assets/questoes_template_slides.tex',
-    shuffle_seed=None,             # seed do resolver T3 (não embaralhamos no Beamer)
+    shuffle_seed=None,             # seed p/ CORE (shuffle e, se quiser, variáveis)
     title='Exercícios – Apresentação',
     fsq='Large',
     fsa='normalsize',
-    alert_color='red',             # compatibilidade; \alert usa cor do tema
+    alert_color='red',             # compatibilidade; \alert usa a cor do tema
+    resolve_vars=True,             # deixe True para core resolver variáveis
+    seed_for_vars=None,            # se None, usa a mesma seed do shuffle
+    vars_env=None,                 # dicionário extra para resolver variáveis, se precisar
     **kwargs
 ) -> int:
     """
     Gera .tex Beamer conforme o padrão acordado.
-    - Ordem das questões por id (sem shuffle).
+    - A ordem das questões por id é mantida aqui (sem shuffle adicional no Beamer).
+      OBS: o shuffle já aconteceu no CORE quando você passou shuffle_seed.
     - Caminhos de imagem relativos ao diretório do JSON.
-    - Resolve Tipo 3 (variáveis/resoluções e substituições <...>) antes de renderizar.
+    - A resolução de variáveis e o merge/shuffle das alternativas acontecem no CORE.
     """
-    # Carregar JSON(s) e detectar diretório base das imagens relativo ao JSON
+    # Base dir para imagens (pega do primeiro JSON)
     if isinstance(input_json, (list, tuple)):
-        qs: List[Dict[str, Any]] = []
-        json_dirs = []
+        base_dir = str(Path(input_json[0]).parent.resolve()) if input_json else None
+        # Carrega e concatena todas as questões já normalizadas pelo CORE
+        all_qs: List[Dict[str, Any]] = []
         for p in input_json:
-            qs.extend(_load_json_list(p))
-            json_dirs.append(str(Path(p).parent.resolve()))
-        base_dir = json_dirs[0] if json_dirs else None
+            ds = load_quiz(
+                p,
+                shuffle_seed=shuffle_seed,
+                resolve_vars=resolve_vars,
+                seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
+                vars_env=vars_env
+            )
+            all_qs.extend(ds.get("questions", []))
+        qs = all_qs
     else:
-        qs = _load_json_list(input_json)
         base_dir = str(Path(input_json).parent.resolve())
+        ds = load_quiz(
+            input_json,
+            shuffle_seed=shuffle_seed,
+            resolve_vars=resolve_vars,
+            seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
+            vars_env=vars_env
+        )
+        qs = ds.get("questions", [])
 
-    # Ordenar por id (robusto)
+    # Ordenar por id (robusto): não altera alternativas (já prontas no CORE)
     try:
         qs = sorted(qs, key=lambda q: int(q.get("id", 0)))
     except Exception:
         pass
 
-    # PREÂMBULO com widescreen e Unicode
+    # PREÂMBULO com widescreen e Unicode (inalterado)
     preamble = (
         "\\documentclass[aspectratio=169]{beamer}\n"
         "\\usepackage{bookmark}\n"
@@ -317,54 +317,45 @@ def json2beamer(
         "\\usetheme{Madrid}\n"
         "\\usepackage{graphicx}\n"
         "\\usepackage{enumitem}\n"
-        # Unicode / fontes
         "\\usepackage[T1]{fontenc}\n"
         "\\usepackage{lmodern}\n"
         "\\usepackage{textcomp}\n"
         "\\usepackage{upquote}\n"
-        # tabularx para grade invisível (carregar ANTES do newcolumntype)
         "\\usepackage{array}\n"
         "\\usepackage{tabularx}\n"
         "\\newcolumntype{C}{>{\\centering\\arraybackslash}X}\n"
-        # (opcional) mapeamentos Unicode úteis
         "\\usepackage{newunicodechar}\n"
-        "% Grego minúsculo\n"
-        "\\DeclareUnicodeCharacter{03B1}{\\ensuremath{\\alpha}}\n"      # α
-        "\\DeclareUnicodeCharacter{03B2}{\\ensuremath{\\beta}}\n"       # β
-        "\\DeclareUnicodeCharacter{03B3}{\\ensuremath{\\gamma}}\n"      # γ
-        "\\DeclareUnicodeCharacter{03B4}{\\ensuremath{\\delta}}\n"      # δ
-        "\\DeclareUnicodeCharacter{03B5}{\\ensuremath{\\varepsilon}}\n" # ε
-        "\\DeclareUnicodeCharacter{03B8}{\\ensuremath{\\theta}}\n"      # θ
-        "\\DeclareUnicodeCharacter{03BB}{\\ensuremath{\\lambda}}\n"     # λ
-        "\\DeclareUnicodeCharacter{03BC}{\\ensuremath{\\mu}}\n"         # μ
-        "\\DeclareUnicodeCharacter{03C0}{\\ensuremath{\\pi}}\n"         # π
-        "\\DeclareUnicodeCharacter{03C1}{\\ensuremath{\\rho}}\n"        # ρ
-        "\\DeclareUnicodeCharacter{03C3}{\\ensuremath{\\sigma}}\n"      # σ
-        "\\DeclareUnicodeCharacter{03C6}{\\ensuremath{\\varphi}}\n"     # φ
-        "\\DeclareUnicodeCharacter{03C9}{\\ensuremath{\\omega}}\n"      # ω
-        "% Grego maiúsculo\n"
-        "\\DeclareUnicodeCharacter{0394}{\\ensuremath{\\Delta}}\n"      # Δ
-        "\\DeclareUnicodeCharacter{03A9}{\\ensuremath{\\Omega}}\n"      # Ω
-        "% Símbolos comuns\n"
-        "\\DeclareUnicodeCharacter{00B0}{\\ensuremath{^{\\circ}}}\n"    # °
-        "\\DeclareUnicodeCharacter{00D7}{\\ensuremath{\\times}}\n"      # ×
-        "\\DeclareUnicodeCharacter{2212}{-}\n"                          # − (minus sign U+2212) -> hífen
-        "% Espaços especiais\n"
-        "\\DeclareUnicodeCharacter{00A0}{~}\n"                          # NBSP
-        "\\DeclareUnicodeCharacter{202F}{\\,}\n"                        # NNBSP -> espaço fino
-        "% Sobrescritos Unicode comuns em unidades\n"
-        "\\DeclareUnicodeCharacter{207B}{\\ensuremath{^{-}}}\n"         # ⁻ (superscript minus)
+        "\\DeclareUnicodeCharacter{03B1}{\\ensuremath{\\alpha}}\n"
+        "\\DeclareUnicodeCharacter{03B2}{\\ensuremath{\\beta}}\n"
+        "\\DeclareUnicodeCharacter{03B3}{\\ensuremath{\\gamma}}\n"
+        "\\DeclareUnicodeCharacter{03B4}{\\ensuremath{\\delta}}\n"
+        "\\DeclareUnicodeCharacter{03B5}{\\ensuremath{\\varepsilon}}\n"
+        "\\DeclareUnicodeCharacter{03B8}{\\ensuremath{\\theta}}\n"
+        "\\DeclareUnicodeCharacter{03BB}{\\ensuremath{\\lambda}}\n"
+        "\\DeclareUnicodeCharacter{03BC}{\\ensuremath{\\mu}}\n"
+        "\\DeclareUnicodeCharacter{03C0}{\\ensuremath{\\pi}}\n"
+        "\\DeclareUnicodeCharacter{03C1}{\\ensuremath{\\rho}}\n"
+        "\\DeclareUnicodeCharacter{03C3}{\\ensuremath{\\sigma}}\n"
+        "\\DeclareUnicodeCharacter{03C6}{\\ensuremath{\\varphi}}\n"
+        "\\DeclareUnicodeCharacter{03C9}{\\ensuremath{\\omega}}\n"
+        "\\DeclareUnicodeCharacter{0394}{\\ensuremath{\\Delta}}\n"
+        "\\DeclareUnicodeCharacter{03A9}{\\ensuremath{\\Omega}}\n"
+        "\\DeclareUnicodeCharacter{00B0}{\\ensuremath{^{\\circ}}}\n"
+        "\\DeclareUnicodeCharacter{00D7}{\\ensuremath{\\times}}\n"
+        "\\DeclareUnicodeCharacter{2212}{-}\n"
+        "\\DeclareUnicodeCharacter{00A0}{~}\n"
+        "\\DeclareUnicodeCharacter{202F}{\\,}\n"
+        "\\DeclareUnicodeCharacter{207B}{\\ensuremath{^{-}}}\n"
         "\\DeclareUnicodeCharacter{2070}{\\ensuremath{^{0}}}\n"
-        "\\DeclareUnicodeCharacter{00B9}{\\ensuremath{^{1}}}\n"         # ¹
-        "\\DeclareUnicodeCharacter{00B2}{\\ensuremath{^{2}}}\n"         # ²
-        "\\DeclareUnicodeCharacter{00B3}{\\ensuremath{^{3}}}\n"         # ³
+        "\\DeclareUnicodeCharacter{00B9}{\\ensuremath{^{1}}}\n"
+        "\\DeclareUnicodeCharacter{00B2}{\\ensuremath{^{2}}}\n"
+        "\\DeclareUnicodeCharacter{00B3}{\\ensuremath{^{3}}}\n"
         "\\DeclareUnicodeCharacter{2074}{\\ensuremath{^{4}}}\n"
         "\\DeclareUnicodeCharacter{2075}{\\ensuremath{^{5}}}\n"
         "\\DeclareUnicodeCharacter{2076}{\\ensuremath{^{6}}}\n"
         "\\DeclareUnicodeCharacter{2077}{\\ensuremath{^{7}}}\n"
         "\\DeclareUnicodeCharacter{2078}{\\ensuremath{^{8}}}\n"
         "\\DeclareUnicodeCharacter{2079}{\\ensuremath{^{9}}}\n"
-        "% Subscritos (U+2080..U+2089) — caso apareçam\n"
         "\\DeclareUnicodeCharacter{2080}{\\ensuremath{_{0}}}\n"
         "\\DeclareUnicodeCharacter{2081}{\\ensuremath{_{1}}}\n"
         "\\DeclareUnicodeCharacter{2082}{\\ensuremath{_{2}}}\n"
@@ -374,7 +365,7 @@ def json2beamer(
         "\\DeclareUnicodeCharacter{2086}{\\ensuremath{_{6}}}\n"
         "\\DeclareUnicodeCharacter{2087}{\\ensuremath{_{7}}}\n"
         "\\DeclareUnicodeCharacter{2088}{\\ensuremath{_{8}}}\n"
-        "\\DeclareUnicodeCharacter{2089}{\\ensuremath{_{9}}}\n"                
+        "\\DeclareUnicodeCharacter{2089}{\\ensuremath{_{9}}}\n"
         "\\title{" + latex_escape(title) + "}\n"
         "\\author{}\n"
         "\\date{}\n"
@@ -388,19 +379,20 @@ def json2beamer(
         f"\\newcommand{{\\BodySize}}{{\\{fsa}}}\n",
     ]
 
-    for q in qs:
-        # --- resolve Tipo 3 (variáveis + resoluções + substituições <...>) ---
-        q_res, _env = resolve_all(q, seed=shuffle_seed)
-
+    for q_res in qs:
         qid = q_res.get("id", "?")
         enun = (q_res.get("enunciado", "") or "").strip()
         enun_tex = latex_escape(enun)
         tipo = int(q_res.get("tipo", 1))
+        alts = q_res.get("alternativas", []) or []
+        correct_idx = q_res.get("correct_index")  # índice calculado pelo CORE
+        correta_val = None
+        if isinstance(correct_idx, int) and 0 <= correct_idx < len(alts):
+            correta_val = alts[correct_idx]
+        else:
+            # compat: se por algum motivo não veio, usa 'correta' (valor)
+            correta_val = q_res.get("correta", "")
 
-        # Alternativas (lista FINAL do pipeline, com garantia da correta presente)
-        alts = _alts_final(q_res)
-
-        # Imagens do enunciado
         imgs = q_res.get("imagens") or []
 
         # ---------------- Frame 1: sem gabarito ----------------
@@ -413,7 +405,6 @@ def json2beamer(
 
         if q_res.get("afirmacoes"):
             parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
-            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas
             sub = (q_res.get("subenunciado") or "").strip()
             if sub:
                 parts.append(r"\medskip")
@@ -423,16 +414,15 @@ def json2beamer(
         if tipo == 2:
             parts.append(render_alts_images(alts, base_dir=base_dir))
         else:
-            # Lê K de 'alternativas;K' (apenas layout)
-            K = _alternativas_firstrow(q_res)
+            K = q_res.get('alternativas_firstrow')
             grid = render_alts_grid_beamer_from_list(
                 alts=alts,
-                correta=q_res.get('correta', ''),
+                correta=correta_val,
                 K=K,
                 base_dir=base_dir,
                 highlight_correct=False
             )
-            parts.append(grid if grid else render_alts_text(alts, q_res.get('correta', ''), highlight=False))
+            parts.append(grid if grid else render_alts_text(alts, correta_val, highlight=False))
 
         parts.append("}")
         parts.append("\\end{frame}\n")
@@ -447,7 +437,6 @@ def json2beamer(
 
         if q_res.get("afirmacoes"):
             parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
-            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas
             sub = (q_res.get("subenunciado") or "").strip()
             if sub:
                 parts.append(r"\medskip")
@@ -455,18 +444,17 @@ def json2beamer(
                 parts.append(r"\medskip")
 
         if tipo == 2:
-            # Imagens: repetimos (sem highlight)
             parts.append(render_alts_images(alts, base_dir=base_dir))
         else:
-            K = _alternativas_firstrow(q_res)
+            K = q_res.get('alternativas_firstrow')
             grid = render_alts_grid_beamer_from_list(
                 alts=alts,
-                correta=q_res.get('correta', ''),
+                correta=correta_val,
                 K=K,
                 base_dir=base_dir,
                 highlight_correct=True
             )
-            parts.append(grid if grid else render_alts_text(alts, q_res.get('correta', ''), highlight=True))
+            parts.append(grid if grid else render_alts_text(alts, correta_val, highlight=True))
 
         parts.append("}")
         parts.append("\\end{frame}\n")

@@ -448,10 +448,11 @@ class App(ttk.Frame):
         for p in paths:
             if not Path(p).exists():
                 raise FileNotFoundError(f"Arquivo não encontrado: {p}")
-            with open(p, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            from core import load_quiz
+            ds = load_quiz(p)
+            data = ds.get('questions', [])
             if not isinstance(data, list):
-                raise ValueError(f"O JSON precisa ser um array de questões: {p}")
+                raise ValueError(f'O JSON precisa conter questões após normalização: {p}')
             all_qs.extend(data)
         all_qs.sort(key=lambda q: q.get("id", 0))
         for i, q in enumerate(all_qs, start=1):

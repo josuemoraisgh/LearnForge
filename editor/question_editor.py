@@ -49,13 +49,23 @@ class QuestionEditor(tk.Toplevel):
 
         # carrega JSON
         try:
-            self.data = json.loads(_read_text_any(self.json_path))
+            from core.loader import load_quiz, QuizLoadError
+            ds = load_quiz(self.json_path)
+            self.dataset = ds                       # dict padronizado
+            self.data = ds.get('questions', [])      # lista de questões
+            self.meta = ds.get('meta', {})           # metadados
             if not isinstance(self.data, list):
-                raise ValueError("JSON não é um array de questões.")
+                raise ValueError('JSON não é um array de questões após normalização.')
         except Exception as e:
-            messagebox.showerror(APP_TITLE, f"Erro ao abrir JSON:\n{e}", parent=self)
+            messagebox.showerror(APP_TITLE, f'Erro ao abrir JSON:{e}', parent=self)
             self.destroy()
             return
+
+        self.idx = 0
+        self.var_dirty = tk.BooleanVar(value=False)
+        
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
 
         self.idx = 0
         self.var_dirty = tk.BooleanVar(value=False)

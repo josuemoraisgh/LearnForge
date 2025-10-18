@@ -38,16 +38,10 @@ def _read_text_any(p: Path) -> str:
         except Exception: pass
     return b.decode("utf-8", errors="replace")
 
-def _load_json_list(p: str) -> List[Dict[str, Any]]:
-    """Carrega lista de questões e anota _base_dir relativo ao JSON, para resolver caminhos de imagem."""
-    text = _read_text_any(Path(p))
-    data = json.loads(text)
-    if not isinstance(data, list):
-        raise ValueError(f"{p}: o JSON deve ser um array de questões.")
-    base = str(Path(p).parent.resolve())
-    for q in data:
-        q.setdefault("_base_dir", base)
-    return data
+from core import load_quiz
+
+def _load_json_list(p: str) -> list[dict]:
+    return load_quiz(p).get('questions', [])
 
 def _alts_with_correct(q: Dict[str, Any]) -> List[str]:
     """Garante a presença da correta e remove duplicatas preservando a ordem."""
