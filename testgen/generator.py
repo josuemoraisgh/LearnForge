@@ -87,19 +87,8 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
 
     # 1) Enunciado
     runs.append({"type":"text","text": f"{seq}) {q['enunciado']}\n"})
-
-    # 2) (Opcional) Linha de afirmativas do Tipo 4
-    line = (q.get("extra") or {}).get("afirmacoes_line", "")
-    if not line:
-        afirm = q.get("afirmacoes") or {}
-        if isinstance(afirm, dict) and afirm:
-            order = ["I","II","III","IV","V","VI","VII","VIII","IX","X"]
-            labeled = [f"{k}. {afirm[k]}" for k in order if k in afirm]
-            line = "; ".join(labeled)
-    if line:
-        runs.append({"type":"text","text": "  " + line + "\n"})
-
-    # 3) Imagens do enunciado (AGORA entre enunciado e alternativas)
+    
+    # 2) Imagens do enunciado (AGORA entre enunciado e alternativas)
     imgs = q.get("imagens") or []
     for img in imgs:
         spec_p, wmm, hmm = _parse_img_spec(img)
@@ -111,7 +100,21 @@ def _compose_docx_block(q: Dict[str, Any], seq: int) -> List[Dict[str, Any]]:
             runs.append({"type":"text","text": "[imagem]\n"})
     if imgs:
         runs.append({"type":"text","text": "\n"})  # respiro antes das alternativas
-
+        
+    # 3) (Opcional) Linha de afirmativas do Tipo 4
+    afirm = q.get("afirmacoes") or {}
+    if isinstance(afirm, dict) and afirm:
+        order = ["I","II","III","IV","V","VI","VII","VIII","IX","X"]
+        for k in order:
+            if k in afirm:
+                runs.append({"type":"text","text": f"  {k}. {afirm[k]}\n"})
+                
+    # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas
+    if q.get("afirmacoes"):
+        sub = (q.get("subenunciado") or "").strip()
+        if sub:
+            runs.append({"type":"text","text": f"  {sub}\n\n"})
+        
     # 4) Alternativas
     alts = q.get("alternativas") or []
     for i, alt in enumerate(alts):

@@ -29,6 +29,8 @@ def latex_escape(s: str) -> str:
     out = ""
     for ch in s:
         out += repl.get(ch, ch)
+    # map angle brackets to text macros to avoid encoding issues
+    out = out.replace('<', r'\textless{}').replace('>', r'\textgreater{}')     
     return out
 
 def is_image_path(x: str) -> bool:

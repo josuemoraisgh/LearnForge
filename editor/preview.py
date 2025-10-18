@@ -44,12 +44,18 @@ def preview_text(questions: List[Dict[str, Any]], title: str|None=None, **kwargs
             lines.append(f"   [imagem: {p}{size}]")
 
         # Tipo 4 (afirmativas) — linha única
-        afirm = q_res.get("afirmacoes") or {}
+        afirm = q_res.get("afirmacoes") or {}        
         if isinstance(afirm, dict) and afirm:
             order = ["I","II","III","IV","V","VI","VII","VIII","IX","X"]
-            labeled = [f"{k}. {afirm[k]}" for k in order if k in afirm]
-            if labeled:
-                lines.append("   " + "; ".join(labeled))
+            for k in order:
+                if k in afirm:
+                    lines.append(f"   {k}. {afirm[k]}")
+                    
+        # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas
+        if q_res.get("tipo") == 4:
+            sub = (q_res.get("subenunciado") or "").strip()
+            if sub:
+                lines.append(f"   {sub}")                    
 
         # Alternativas
         alts = q_res.get("alternativas") or []

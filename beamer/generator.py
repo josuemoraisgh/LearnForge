@@ -8,7 +8,7 @@ Padrões aplicados:
 - Dois frames por questão: (1) sem gabarito; (2) com gabarito (\\alert{...}).
 - Frame adicional de OBS. quando houver.
 - Alternativas sempre a), b), c), d).
-- Tipo 4: afirmativas em linha única "I. ...; II. ...; ..." (escapadas e com \par).
+- Tipo 4: afirmativas em linha única "I. ...; II. ...; ..." (escapadas e com \\par).
 - Tipo 2: alternativas por imagem; se arquivo não existir (relativo ao JSON), desenha um quadro vazio.
 - Caminhos de imagem sempre relativos ao diretório do JSON.
 
@@ -123,17 +123,24 @@ def render_images(imgs: List[str], base_dir: str | None = None) -> str:
 
 def render_afirmacoes_line(afirm: Dict[str, str]) -> str:
     """
-    Linha única 'I. ...; II. ...; ...' escapada e precedida de par.
+    Renderiza as afirmativas (Tipo 4) em múltiplas linhas (lista itemize),
+    mantendo a mesma assinatura para compatibilidade com os chamadores.
     Ordem fixa I, II, III… (sem embaralhar).
     """
     if not afirm:
         return ""
     order = ["I","II","III","IV","V","VI","VII","VIII","IX","X"]
-    labeled = [f"{k}. {afirm[k]}" for k in order if k in afirm]
-    if not labeled:
+    itens = [f"{k}. {afirm[k]}" for k in order if k in afirm]
+    if not itens:
         return ""
-    safe = "; ".join(latex_escape(x) for x in labeled)
-    return r"\par " + safe
+
+    # Escapa LaTeX e monta como lista
+    safe_items = [latex_escape(x) for x in itens]
+    lines = [r"\begin{itemize}"]
+    lines += [r"\item " + s for s in safe_items]
+    lines += [r"\end{itemize}"]
+    return "\n".join(lines)
+
 
 def render_alts_text(alts: List[str], correta: str, highlight: bool = False) -> str:
     """
@@ -226,7 +233,7 @@ def json2beamer(
 
     # PREÂMBULO com mapeamento Unicode necessário ao pdfLaTeX
     preamble = (
-        "\\documentclass[12pt]{beamer}\n"
+        "\\documentclass[aspectratio=169]{beamer}\n"
         "\\usepackage{bookmark}\n"
         "\\usepackage[utf8]{inputenc}\n"
         "\\usepackage{amsmath}\n"
@@ -236,6 +243,10 @@ def json2beamer(
         "\\usepackage{enumitem}\n"
         "% --- Unicode em pdfLaTeX ---\n"
         "\\usepackage{newunicodechar}\n"
+        "\\usepackage[T1]{fontenc}\n"
+        "\\usepackage{lmodern}\n"
+        "\\usepackage{textcomp}\n"
+        "\\usepackage{upquote}\n"        
         "% Grego minúsculo\n"
         "\\DeclareUnicodeCharacter{03B1}{\\ensuremath{\\alpha}}\n"      # α
         "\\DeclareUnicodeCharacter{03B2}{\\ensuremath{\\beta}}\n"       # β
@@ -321,6 +332,12 @@ def json2beamer(
 
         if q_res.get("afirmacoes"):
             parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
+            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas            
+            sub = (q.get("subenunciado") or "").strip()
+            if sub:
+                parts.append(r"\medskip")
+                parts.append("{\\BodySize " + latex_escape(sub) + "}")
+                parts.append(r"\medskip")                     
 
         if tipo == 2:
             parts.append(render_alts_images(alts, base_dir=base_dir))
@@ -340,7 +357,14 @@ def json2beamer(
 
         if q_res.get("afirmacoes"):
             parts.append(render_afirmacoes_line(q_res["afirmacoes"]))
+            # SUBENUNCIADO (Tipo 4) — entre afirmações e alternativas            
+            sub = (q.get("subenunciado") or "").strip()
+            if sub:
+                parts.append(r"\medskip")
+                parts.append("{\\BodySize " + latex_escape(sub) + "}")
+                parts.append(r"\medskip")              
 
+        
         if tipo == 2:
             # Para imagem, mantemos sem highlight; apenas repetimos as imagens/quadro
             parts.append(render_alts_images(alts, base_dir=base_dir))
