@@ -285,8 +285,8 @@ def json2beamer(
                 p,
                 shuffle_seed=shuffle_seed,
                 resolve_vars=resolve_vars,
-                seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
-                vars_env=vars_env
+                # seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
+                # vars_env=vars_env
             )
             all_qs.extend(ds.get("questions", []))
         qs = all_qs
@@ -296,8 +296,8 @@ def json2beamer(
             input_json,
             shuffle_seed=shuffle_seed,
             resolve_vars=resolve_vars,
-            seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
-            vars_env=vars_env
+            # seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
+            # vars_env=vars_env
         )
         qs = ds.get("questions", [])
 
