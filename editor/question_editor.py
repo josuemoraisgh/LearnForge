@@ -44,7 +44,7 @@ class QuestionEditor(tk.Toplevel):
 
         # Carregar via core
         try:
-            ds = load_quiz(self.json_path)
+            ds = load_quiz(self.json_path, isMath=False)
             self.dataset: Dict[str, Any] = ds
             self.data: List[Dict[str, Any]] = ds.get("questions", [])
             self.meta: Dict[str, Any] = ds.get("meta", {})
@@ -309,19 +309,33 @@ class QuestionEditor(tk.Toplevel):
 
         # dict -> “tabela” (duas colunas, 1:3)
         if isinstance(value, dict):
-            frm = self._label_frame(self.form_frame, key.capitalize() + " (chave = valor)")
+            frm = self._label_frame(self.form_frame, key.capitalize() + " (chave : valor)")
             frm.grid(row=row, column=0, sticky="nsew", pady=(0, 6))
             # Proporção 1/3 x 2/3 usando pesos uniformes
             frm.columnconfigure(0, weight=1, uniform="cols")
             frm.columnconfigure(1, weight=3, uniform="cols")
 
             items = list(value.items())  # ordem do JSON preservada
-            rows = max(5, len(items))
+            rows = len(items)
 
             ttk.Label(frm, text="Chave").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 2))
             ttk.Label(frm, text="Valor").grid(row=0, column=1, sticky="w", padx=6, pady=(6, 2))
 
             row_entries: List[Tuple[ttk.Entry, ttk.Entry]] = []
+            selected_row = {"idx": -1}  # mutável para fechar sobre as funções
+
+            def _bind_row_focus(idx: int, ek: ttk.Entry, ev: ttk.Entry):
+                def _on_focus_in(_evt=None):
+                    selected_row["idx"] = idx
+                    # habilita o Delete quando há seleção
+                    btn_del.state(["!disabled"])
+                ek.bind("<FocusIn>", _on_focus_in, add="+")
+                ev.bind("<FocusIn>", _on_focus_in, add="+")
+                # qualquer edição marca como sujo
+                ek.bind("<KeyRelease>", self._mark_dirty, add="+")
+                ev.bind("<KeyRelease>", self._mark_dirty, add="+")
+            
+            # cria as linhas iniciais
             for i in range(rows):
                 ek = ttk.Entry(frm)
                 ev = ttk.Entry(frm)
@@ -331,12 +345,79 @@ class QuestionEditor(tk.Toplevel):
                     k, v = items[i]
                     ek.insert(0, str(k))
                     ev.insert(0, str(v))
-                ek.bind("<KeyRelease>", self._mark_dirty, add="+")
-                ev.bind("<KeyRelease>", self._mark_dirty, add="+")
+                _bind_row_focus(i, ek, ev)
                 row_entries.append((ek, ev))
 
+            # --- barra de ações (abaixo da tabela) ---
+            bar = ttk.Frame(frm)
+            # linha logo após as entradas (+1 do cabeçalho, +rows de dados)
+            bar.grid(row=rows + 1, column=0, columnspan=2, sticky="ew", padx=6, pady=(6, 6))
+            bar.columnconfigure(0, weight=0)
+            bar.columnconfigure(1, weight=0)
+            bar.columnconfigure(2, weight=1)
+
+            btn_ins = ttk.Button(bar, text="Insert Line")
+            btn_del = ttk.Button(bar, text="Delete Line")
+
+            def _regrid_rows():
+                """Reatribui grid das linhas após inserção/remoção e reindexa binds."""
+                for i, (ek, ev) in enumerate(row_entries):
+                    ek.grid_configure(row=i + 1, column=0)
+                    ev.grid_configure(row=i + 1, column=1)
+                    # rebinda para ajustar índice correto
+                    for seq in ("<FocusIn>",):
+                        ek.unbind(seq)
+                        ev.unbind(seq)
+                    _bind_row_focus(i, ek, ev)
+                # reposiciona a barra logo após a última linha
+                last = len(row_entries)
+                bar.grid_configure(row=last + 1, column=0, columnspan=2)
+                # se nada selecionado, desabilita delete
+                if selected_row["idx"] < 0 or selected_row["idx"] >= len(row_entries):
+                    btn_del.state(["disabled"])
+
+            def _insert_line():
+                """Insere linha vazia ao final e seleciona-a."""
+                ek = ttk.Entry(frm)
+                ev = ttk.Entry(frm)
+                row_entries.append((ek, ev))
+                ek.grid(row=len(row_entries), column=0, sticky="ew", padx=6, pady=2)
+                ev.grid(row=len(row_entries), column=1, sticky="ew", padx=6, pady=2)
+                _bind_row_focus(len(row_entries) - 1, ek, ev)
+                selected_row["idx"] = len(row_entries) - 1
+                btn_del.state(["!disabled"])
+                self._mark_dirty()
+                _regrid_rows()
+                ek.focus_set()
+
+            def _delete_line():
+                """Apaga a linha selecionada, se houver."""
+                idx = selected_row["idx"]
+                if 0 <= idx < len(row_entries):
+                    ek, ev = row_entries.pop(idx)
+                    try:
+                        ek.destroy()
+                        ev.destroy()
+                    except Exception:
+                        pass
+                    selected_row["idx"] = -1
+                    self._mark_dirty()
+                    _regrid_rows()
+
+            btn_ins.configure(command=_insert_line)
+            btn_del.configure(command=_delete_line)
+
+            # estado inicial: delete desabilitado
+            btn_del.state(["disabled"])
+
+            btn_ins.grid(row=0, column=0, padx=(0, 6))
+            btn_del.grid(row=0, column=1, padx=(0, 6))
+            ttk.Label(bar, text=" ").grid(row=0, column=2, sticky="ew")  # expansor
+
+            # registra no dicionário de editores
             self.editors[key] = {"type": "dict", "rows": row_entries}
             return
+
 
         # fallback: tratar como string
         frm = self._label_frame(self.form_frame, key.capitalize())
@@ -573,7 +654,8 @@ class QuestionEditor(tk.Toplevel):
 
     def update_preview(self):
         try:
-            q = self.collect_form()
+            a = self.collect_form()
+            q = load_quiz(a)
         except Exception:
             q = self.data[self.idx]
 

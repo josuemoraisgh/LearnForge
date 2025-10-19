@@ -5,6 +5,40 @@ import ast, re, random
 
 ANGLE_RE = re.compile(r"<([^<>]+)?>")
 
+import re
+
+_RANGE_RE = re.compile(
+    r"^\s*([+-]?\d+(?:\.\d+)?)\s*:\s*([+-]?\d+(?:\.\d+)?)\s*:\s*([+-]?\d+(?:\.\d+)?)\s*$"
+)
+
+def _parse_range_spec(spec_str: str) -> tuple[float, float, float]:
+    """
+    Aceita apenas 'min:step:max' (floats, com sinal opcional). Ex.: '1:0.5:3'
+    Retorna (min_v, step, max_v) como floats, com validações.
+    """
+    m = _RANGE_RE.match(spec_str or "")
+    if not m:
+        raise ValueError("Variável deve estar no formato 'min:step:max' (ex.: '1:0.5:3').")
+    min_v = float(m.group(1))
+    step  = float(m.group(2))
+    max_v = float(m.group(3))
+
+    if step <= 0:
+        raise ValueError("step deve ser > 0.")
+    if max_v < min_v:
+        raise ValueError("max deve ser >= min.")
+
+    # (opcional) checagem de múltiplos — tolerância p/ float
+    span = (max_v - min_v) / step
+    if abs(round(span) - span) > 1e-9:
+        # Não é múltiplo exato — pode causar discrepância de grade
+        # Mantemos permissivo ou levanta erro; se quiser estrito, descomente:
+        # raise ValueError("max - min deve ser múltiplo de step.")
+        pass
+
+    return min_v, step, max_v
+
+
 def _is_int(x: float) -> bool:
     return abs(x - int(x)) < 1e-9
 
@@ -67,7 +101,10 @@ def resolve_all(question: Dict[str, Any], seed: int|None) -> Tuple[Dict[str, Any
     # 1) variáveis
     vars_def = (q.get("variaveis") or {})
     for name, spec in vars_def.items():
-        min_v = float(spec["min"]); max_v = float(spec["max"]); step = float(spec["step"])
+        if not isinstance(spec, str):
+            # Enforce estrito: apenas string "min:step:max"
+            raise ValueError(f"Variável '{name}': use string no formato 'min:step:max'.")
+        min_v, step, max_v = _parse_range_spec(spec)
         env[name] = choose_value(min_v, max_v, step, rng)
 
     # 2) resoluções (na ordem declarada)

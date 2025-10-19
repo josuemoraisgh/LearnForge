@@ -2,31 +2,46 @@
 """
 Geração de slides Beamer a partir de JSON de questões.
 
-Padrões aplicados:
-- Preâmbulo (beamer + Madrid) com widescreen e mapeamento Unicode.
+Regras:
 - Ordena por id; título do frame: "<id>) <enunciado>".
-- Dois frames por questão: (1) sem gabarito; (2) com gabarito (\alert{...}).
+- Dois frames por questão: (1) sem gabarito; (2) com gabarito.
 - OBS. em frame adicional quando houver.
 - Alternativas sempre a), b), c), ...
 - Tipo 4: afirmativas uma por linha (itemize).
 - Tipo 2: alternativas por imagem; se não existir arquivo, desenha quadro vazio.
 - Caminhos de imagem relativos ao diretório do JSON.
 - Suporte a imagens com "caminho;LxA" (mm) no enunciado e nas alternativas.
-- Suporte a "alternativas;K" (K = colunas da 1ª linha) — usando SEMPRE a lista final de
-  alternativas em q_res["alternativas"] (merge + aleatoriedade feitos no pipeline).
+- Suporte a "alternativas;K" (K = colunas da 1ª linha).
+- **NOVO**: a correta NÃO vem mais mesclada pelo core; aqui inserimos a correta
+  em posição pseudo-aleatória determinística e destacamos no 2º slide:
+  - texto: \alert{...}
+  - imagem: borda vermelha (\fcolorbox{red}{white}{...})
 """
 
 from __future__ import annotations
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 import re
-from core import load_quiz
+import hashlib
+import random
+
+from core.loader import load_quiz
 
 # --------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------
 
 IMG_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.pdf')
+
+def _rng_for_q(seed: Optional[int], q: Dict[str, Any]) -> random.Random:
+    """
+    RNG determinístico por questão (id + enunciado + tamanho atual de alternativas),
+    para que o índice da correta seja reprodutível entre execuções.
+    """
+    base = str(0 if seed is None else seed)
+    salt = f"{q.get('id','')}|{q.get('enunciado','')}|{len(q.get('alternativas') or [])}"
+    h = hashlib.sha256((base + "|" + salt).encode("utf-8")).hexdigest()
+    return random.Random(int(h[:16], 16))  # 64 bits
 
 # "caminho;LxA" (mm)
 def _parse_img_spec(s: str):
@@ -119,27 +134,53 @@ def render_alts_text(alts: List[str], corretaIndex: int, highlight: bool = False
     lines.append(r"\end{itemize}")
     return "\n".join(lines)
 
-def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
+def render_alts_images(
+    alts: List[str],
+    base_dir: str | None = None,
+    corretaIndex: int = -1,
+    highlight_correct: bool = False,
+) -> str:
     """
     Alternativas com imagens; rótulo a), b), c)…; se imagem não existir, quadro vazio.
+    Quando highlight_correct=True, a alternativa correta (corretaIndex) recebe borda vermelha.
+
+    Estratégia de destaque:
+      - \fcolorbox{red}{white}{\includegraphics{...}}
+      - Mantemos o rótulo normal (a), b), ...), só a figura recebe a borda.
     """
     if not alts:
         return ""
     lines = [r"\begin{itemize}"]
     for i, alt in enumerate(alts):
         label = _label(i)
+
         if _is_image_path(alt or ""):
             spec_p, wmm, hmm = _parse_img_spec(alt)
             p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
             if p.exists():
                 if wmm and hmm:
-                    lines.append(r"\item[" + label + "] " + rf"\includegraphics[width={wmm}mm,height={hmm}mm]{{{p.as_posix()}}}")
+                    img_cmd = rf"\includegraphics[width={wmm}mm,height={hmm}mm]{{{p.as_posix()}}}"
                 else:
-                    lines.append(r"\item[" + label + "] " + rf"\includegraphics[width=0.75\linewidth]{{{p.as_posix()}}}")
+                    img_cmd = rf"\includegraphics[width=0.75\linewidth]{{{p.as_posix()}}}"
+
+                # aplica borda vermelha na CORRETA quando highlight estiver ativo
+                if highlight_correct and i == corretaIndex:
+                    img_cmd = r"\fcolorbox{red}{white}{" + img_cmd + "}"
+
+                lines.append(r"\item[" + label + "] " + img_cmd)
             else:
-                lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
+                # caixa vazia; se for a correta com highlight, usa borda vermelha
+                empty_box = r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}"
+                if highlight_correct and i == corretaIndex:
+                    empty_box = r"\fcolorbox{red}{white}{" + empty_box + "}"
+                lines.append(r"\item[" + label + "] " + empty_box)
         else:
-            lines.append(r"\item[" + label + "] " + r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}")
+            # não é caminho de imagem; mostra caixa vazia (ou poderia exibir texto escapado)
+            empty_box = r"\fbox{\rule{0pt}{4cm}\rule{6cm}{0pt}}"
+            if highlight_correct and i == corretaIndex:
+                empty_box = r"\fcolorbox{red}{white}{" + empty_box + "}"
+            lines.append(r"\item[" + label + "] " + empty_box)
+
     lines.append(r"\end{itemize}")
     return "\n".join(lines)
 
@@ -154,6 +195,7 @@ def render_alts_grid_beamer_from_list(
     Renderiza 'alts' (lista final) em 2 linhas: 1ª com K colunas; 2ª com o restante.
     Mantém a ordem; rótulos a), b), c)...; se highlight_correct=True, aplica \alert
     APENAS no conteúdo textual da alternativa correta (nunca no label).
+    Para imagens, a sinalização é feita na função render_alts_images (borda vermelha).
     """
     if not alts or not isinstance(K, int) or K <= 0 or K >= len(alts):
         return ""
@@ -169,7 +211,7 @@ def render_alts_grid_beamer_from_list(
         a = alts[i]
         lab = labels[i]
 
-        # Se for imagem ("path[;LxA]"), não aplicamos \alert (apenas centralizamos)
+        # Se for imagem ("path[;LxA]"), não aplicamos \alert aqui
         if _is_image_path(a or ""):
             spec_p, wmm, hmm = _parse_img_spec(a)
             p = Path(base_dir, spec_p) if base_dir else Path(spec_p)
@@ -180,8 +222,9 @@ def render_alts_grid_beamer_from_list(
                     content = rf"\includegraphics[width=0.9\linewidth]{{{p.as_posix()}}}"
             else:
                 content = r"\fbox{\rule{0pt}{2.5cm}\rule{3.5cm}{0pt}}"
-
-            # label normal, conteúdo sem alert
+            # A borda vermelha para imagens é feita em render_alts_images (lista vertical),
+            # aqui apenas exibimos a figura sem alert. Se desejar borda também no grid,
+            # pode envolver 'content' em \fcolorbox na condição _is_correct(i).
             return r"\centering " + lab + " " + content
 
         # Texto: aplica \alert apenas no texto quando for a correta
@@ -205,25 +248,28 @@ def render_alts_grid_beamer_from_list(
         parts.append(r"\end{tabularx}")
 
     return "\n".join(parts)
+
 # --------------------------------------------------------------------
 # Gerador principal
 # --------------------------------------------------------------------
 def json2beamer(
     input_json='assets/questoes_template.json',
     output_tex='assets/questoes_template_slides.tex',
-    shuffle_seed=None,             # seed p/ CORE (shuffle e, se quiser, variáveis)
+    shuffle_seed=None,             # seed p/ core e para posicionar a correta aqui
     title='Exercícios – Apresentação',
     fsq='Large',
     fsa='normalsize',
-    alert_color='red',             # compatibilidade; \alert usa a cor do tema
+    alert_color='red',             # \alert usa a cor do tema; mantido por compat
     **kwargs
 ) -> int:
     """
     Gera .tex Beamer conforme o padrão acordado.
     - A ordem das questões por id é mantida aqui (sem shuffle adicional no Beamer).
-      OBS: o shuffle já aconteceu no CORE quando você passou shuffle_seed.
+      OBS: o shuffle de alternativas já pode ter acontecido no CORE.
     - Caminhos de imagem relativos ao diretório do JSON.
-    - A resolução de variáveis e o merge/shuffle das alternativas acontecem no CORE.
+    - A resolução de variáveis acontece no CORE.
+    - **Novo fluxo**: a correta é inserida aqui, em posição determinística por questão, e
+      só é destacada no segundo frame (texto = \alert; imagem = borda vermelha).
     """
     # Base dir para imagens (pega do primeiro JSON)
     if isinstance(input_json, (list, tuple)):
@@ -231,27 +277,21 @@ def json2beamer(
         # Carrega e concatena todas as questões já normalizadas pelo CORE
         all_qs: List[Dict[str, Any]] = []
         for p in input_json:
-            ds = load_quiz(
-                p,
-                shuffle_seed,
-            )
+            ds = load_quiz(p, shuffle_seed)
             all_qs.extend(ds.get("questions", []))
         qs = all_qs
     else:
         base_dir = str(Path(input_json).parent.resolve())
-        ds = load_quiz(
-            input_json,
-            shuffle_seed,
-        )
+        ds = load_quiz(input_json, shuffle_seed)
         qs = ds.get("questions", [])
 
-    # Ordenar por id (robusto): não altera alternativas (já prontas no CORE)
+    # Ordenar por id (robusto)
     try:
         qs = sorted(qs, key=lambda q: int(q.get("id", 0)))
     except Exception:
         pass
 
-    # PREÂMBULO com widescreen e Unicode (inalterado)
+    # PREÂMBULO com widescreen e Unicode
     preamble = (
         "\\documentclass[aspectratio=169]{beamer}\n"
         "\\usepackage{bookmark}\n"
@@ -268,6 +308,7 @@ def json2beamer(
         "\\usepackage{array}\n"
         "\\usepackage{tabularx}\n"
         "\\newcolumntype{C}{>{\\centering\\arraybackslash}X}\n"
+        "\\usepackage{xcolor}\n"
         "\\usepackage{newunicodechar}\n"
         "\\DeclareUnicodeCharacter{03B1}{\\ensuremath{\\alpha}}\n"
         "\\DeclareUnicodeCharacter{03B2}{\\ensuremath{\\beta}}\n"
@@ -328,9 +369,33 @@ def json2beamer(
         enun = (q_res.get("enunciado", "") or "").strip()
         enun_tex = latex_escape(enun)
         tipo = int(q_res.get("tipo", 1))
-        alts = q_res.get("alternativas", []) or []
-        correct_idx, _ = q_res.get("correta")  # índice calculado pelo CORE
+        base_alts = q_res.get("alternativas", []) or []
+        correta_val = q_res.get("correta", None)
         imgs = q_res.get("imagens") or []
+
+        # --- Inserção da correta em posição determinística por questão (SEM procurar antes) ---
+        alts: List[str] = list(base_alts)  # cópia
+        correta_index = -1
+
+        if correta_val is not None and correta_val != "":
+            # posição determinística por questão
+            rng = _rng_for_q(shuffle_seed, q_res)
+            pos = rng.randrange(0, len(alts) + 1)
+
+            # se já existe, remove a primeira ocorrência para controlarmos o índice de destaque
+            try:
+                # comparação robusta convertendo a str (cobre números, etc.)
+                existing = next(i for i, a in enumerate(alts) if str(a) == str(correta_val))
+                alts.pop(existing)
+                if existing < pos:
+                    pos -= 1  # ajuste se removemos antes da posição escolhida
+            except StopIteration:
+                pass
+
+            # insere a correta
+            alts.insert(pos, correta_val)
+            correta_index = pos
+
 
         # ---------------- Frame 1: sem gabarito ----------------
         parts.append("\\begin{frame}")
@@ -345,21 +410,28 @@ def json2beamer(
             sub = (q_res.get("subenunciado") or "").strip()
             if sub:
                 parts.append(r"\medskip")
-                parts.append("{\\BodySize " + latex_escape(sub) + "}")
+                parts.append("{\\BodySize " + latex_escape(sub) + r"\par}")
                 parts.append(r"\medskip")
 
         if tipo == 2:
-            parts.append(render_alts_images(alts, base_dir=base_dir))
+            # Imagens nas alternativas – sem destaque no 1º frame
+            parts.append(
+                render_alts_images(
+                    alts, base_dir=base_dir,
+                    corretaIndex=correta_index,
+                    highlight_correct=False
+                )
+            )
         else:
             K = q_res.get('alternativas_firstrow')
             grid = render_alts_grid_beamer_from_list(
                 alts=alts,
-                corretaIndex=correct_idx,
+                corretaIndex=correta_index,
                 K=K,
                 base_dir=base_dir,
                 highlight_correct=False
             )
-            parts.append(grid if grid else render_alts_text(alts, correct_idx, highlight=False))
+            parts.append(grid if grid else render_alts_text(alts, correta_index, highlight=False))
 
         parts.append("}")
         parts.append("\\end{frame}\n")
@@ -377,21 +449,28 @@ def json2beamer(
             sub = (q_res.get("subenunciado") or "").strip()
             if sub:
                 parts.append(r"\medskip")
-                parts.append("{\\BodySize " + latex_escape(sub) + "}")
+                parts.append("{\\BodySize " + latex_escape(sub) + r"\par}")
                 parts.append(r"\medskip")
 
         if tipo == 2:
-            parts.append(render_alts_images(alts, base_dir=base_dir))
+            # Imagens nas alternativas – com borda vermelha na correta
+            parts.append(
+                render_alts_images(
+                    alts, base_dir=base_dir,
+                    corretaIndex=correta_index,
+                    highlight_correct=True
+                )
+            )
         else:
             K = q_res.get('alternativas_firstrow')
             grid = render_alts_grid_beamer_from_list(
                 alts=alts,
-                corretaIndex=correct_idx,
+                corretaIndex=correta_index,
                 K=K,
                 base_dir=base_dir,
                 highlight_correct=True
             )
-            parts.append(grid if grid else render_alts_text(alts, correct_idx, highlight=True))
+            parts.append(grid if grid else render_alts_text(alts, correta_index, highlight=True))
 
         parts.append("}")
         parts.append("\\end{frame}\n")

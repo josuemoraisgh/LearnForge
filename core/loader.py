@@ -10,7 +10,7 @@ import logging
 import re
 import hashlib
 import random
-from .math import resolve_all  # <— cálculo correto de variáveis/resoluções + substituições
+from .math import resolve_all  # cálculo de variáveis/resoluções + substituições
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,8 @@ class QuizLoadError(Exception):
 
 def load_quiz(
     source: Union[str, Path, bytes, Dict[str, Any], List[Any]],
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    isMath: bool = True
 ) -> Dict[str, Any]:
     """
     Lê e processa o questionário sem conhecer "tipos".
@@ -34,8 +35,9 @@ def load_quiz(
          - "NOME_firstrow" = VALOR
          - se formato "A x B" (ou "A X B"): também "NOME_secondrow" = B
       3) Resolve variáveis e resoluções com resolve_all() e substitui <...> em todos os textos;
-      4) Prepara alternativas: merge correta, dedup, shuffle determinístico (por questão) e
-         grava 'correta' como tupla (index, valor).
+      4) Prepara alternativas: **apenas embaralha** (shuffle determinístico por questão).
+         - NÃO mescla 'correta' nas alternativas;
+         - NÃO altera o campo 'correta' (mantém como veio).
 
     Retorna sempre: {"questions":[...], "meta": {...}} (mesmo se o JSON original for array raiz).
     """
@@ -47,19 +49,22 @@ def load_quiz(
     # 1) Normalizar chaves "NOME;VALOR" (e "A x B") em cada questão
     for q in questions:
         _normalize_semicolon_keys_inplace(q)
-
-    # 2) Resolver variáveis/resoluções + substituir <...> com o core correto (variables.resolve_all)
-    resolved_questions: List[Dict[str, Any]] = []
-    for q in questions:
+    
+    # 2) Resolver variáveis/resoluções + substituir <...> (quando isMath=True)
+    def _maybe_resolve(q: Dict[str, Any]) -> Dict[str, Any]:
+        if not isMath:
+            return q
         try:
-            q_res, _env = resolve_all(q, seed=seed)
+            q_res, _ = resolve_all(q, seed=seed)
+            return q_res
         except Exception as e:
-            # Se algo falhar, registre e siga com a questão original (sem travar o lote)
+            # Se algo falhar, registra e segue com a questão original
             logger.exception("Falha em resolve_all para questão id=%s: %s", q.get("id"), e)
-            q_res = q
-        resolved_questions.append(q_res)
+            return q
 
-    # 3) Preparar alternativas (merge 'correta', dedup, shuffle determinístico, correta como tupla)
+    resolved_questions: List[Dict[str, Any]] = [_maybe_resolve(q) for q in questions]
+
+    # 3) Preparar alternativas (somente shuffle determinístico; 'correta' intocada)
     for q in resolved_questions:
         _prepare_alternativas_inplace(q, seed=seed)
 
@@ -70,49 +75,84 @@ def load_quiz(
 # I/O e canonicização
 # -----------------------------
 
-def _read_any(source: Union[str, Path, bytes, Dict[str, Any], List[Any]]) -> Union[Dict[str, Any], List[Any]]:
+def _normalize_dataset(obj: Union[Dict[str, Any], List[Any]]) -> Dict[str, Any]:
+    """
+    Converte qualquer forma suportada (dict/list) para o padrão:
+        {"questions": List[dict], "meta": Dict[str, Any]}
+    Regras:
+    - dict com chave 'questions' (list) → respeita e preserva meta (ou {}).
+    - dict sem 'questions' → trata como **uma questão única**.
+    - list → trata como **lista de questões**.
+    """
+    if isinstance(obj, dict):
+        if "questions" in obj and isinstance(obj["questions"], list):
+            return {"questions": obj["questions"], "meta": (obj.get("meta") or {})}
+        # dict = questão única
+        return {"questions": [obj], "meta": {}}
+
+    if isinstance(obj, list):
+        return {"questions": obj, "meta": {}}
+
+    raise QuizLoadError(f"Objeto JSON não normalizável (tipo {type(obj).__name__}).")
+
+def _read_any(source: Union[str, Path, bytes, Dict[str, Any], List[Any]]) -> Dict[str, Any]:
+    """
+    Lê de múltiplas origens (path, zip, diretório, json string/bytes, dict ou list)
+    e **sempre** retorna no formato normalizado:
+        {"questions": [...], "meta": {...}}
+    """
+    # 1) Já é estrutura em memória
     if isinstance(source, (dict, list)):
-        return source
+        return _normalize_dataset(source)
+
+    # 2) Caminho (str/Path)
     if isinstance(source, (str, Path)):
         p = Path(source)
         if p.exists():
             if p.is_file():
                 if p.suffix.lower() == ".zip":
-                    # lê todos os .json do zip e concatena
+                    # Lê todos datasets do zip e mescla
                     datasets: List[Union[Dict[str, Any], List[Any]]] = _read_zip(p)
-                    # se houver múltiplos, concatena "questions"
                     merged_qs: List[Dict[str, Any]] = []
                     merged_meta: Dict[str, Any] = {}
                     for ds in datasets:
-                        qs, mm = _split_questions_and_meta(ds)
-                        merged_qs.extend(qs)
-                        merged_meta.update(mm or {})
+                        norm = _normalize_dataset(ds)
+                        merged_qs.extend(norm["questions"])
+                        merged_meta.update(norm.get("meta") or {})
                     return {"questions": merged_qs, "meta": merged_meta}
                 else:
-                    return _read_json_file(p)
+                    data = _read_json_file(p)
+                    return _normalize_dataset(data)
             else:
-                # diretório: ler todos .json e concatenar
-                qs_all: List[Dict[str, Any]] = []
-                meta_merged: Dict[str, Any] = {}
+                # Diretório: ler todos .json e concatenar
                 files = sorted(p.glob("*.json"))
                 if not files:
                     raise QuizLoadError(f"Nenhum .json no diretório '{p}'.")
+                qs_all: List[Dict[str, Any]] = []
+                meta_merged: Dict[str, Any] = {}
                 for fp in files:
                     data = _read_json_file(fp)
-                    qs, mm = _split_questions_and_meta(data)
-                    qs_all.extend(qs)
-                    meta_merged.update(mm or {})
+                    norm = _normalize_dataset(data)
+                    qs_all.extend(norm["questions"])
+                    meta_merged.update(norm.get("meta") or {})
                 return {"questions": qs_all, "meta": meta_merged}
-        # não existe caminho: pode ser string JSON
+
+        # Caminho não existe → pode ser JSON em string
         try:
-            return json.loads(str(source))
+            obj = json.loads(str(source))
+            return _normalize_dataset(obj)
         except Exception as e:
             raise QuizLoadError(f"Entrada não é caminho nem JSON: {e}") from e
+
+    # 3) bytes/bytearray → JSON
     if isinstance(source, (bytes, bytearray)):
         try:
-            return json.loads(source.decode("utf-8"))
+            obj = json.loads(source.decode("utf-8"))
+            return _normalize_dataset(obj)
         except Exception as e:
             raise QuizLoadError(f"bytes não são JSON válido: {e}") from e
+
+    # 4) Tipo não suportado
     raise QuizLoadError(f"Tipo de origem não suportado: {type(source).__name__}")
 
 def _read_json_file(p: Path) -> Union[Dict[str, Any], List[Any]]:
@@ -234,17 +274,6 @@ def _coerce_scalar(s: str) -> Any:
 # Passo 3: preparar alternativas
 # -----------------------------
 
-def _dedup_preserving_first(items: List[Any]) -> List[Any]:
-    seen = set()
-    out: List[Any] = []
-    for a in items:
-        key = a.strip() if isinstance(a, str) else a
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(a)
-    return out
-
 def _rng_for_item(seed: int, item: Dict[str, Any]) -> random.Random:
     """
     RNG determinístico por item (questão) a partir da seed e conteúdo estável.
@@ -256,50 +285,26 @@ def _rng_for_item(seed: int, item: Dict[str, Any]) -> random.Random:
 
 def _prepare_alternativas_inplace(q: Dict[str, Any], *, seed: Optional[int]) -> None:
     """
-    Concatena 'alternativas' + 'correta', dedup, embaralha determinístico (se seed),
-    e salva:
-      - 'alternativas' final
-      - 'correta' = (index, valor)  (tupla)
+    Embaralha (deterministicamente) a lista de alternativas da questão.
+    - NÃO mescla 'correta' nas alternativas.
+    - NÃO altera o tipo/valor de 'correta'.
     """
     if not isinstance(q, dict):
         return
 
-    alts = q.get("alternativas") or []
+    alts = q.get("alternativas")
     if not isinstance(alts, list):
-        alts = []
+        # mantém como lista vazia se vier inválido
+        q["alternativas"] = []
+        return
 
-    cor_val = q.get("correta", None)
+    # copia para não embaralhar a mesma lista referenciada (por segurança)
+    alts_shuffled = list(alts)
 
-    merged = list(alts)
-    if cor_val not in (None, ""):
-        merged.append(cor_val)
-
-    merged = _dedup_preserving_first(merged)
-
-    # índice da correta antes do shuffle
-    idx = None
-    if cor_val not in (None, ""):
-        try:
-            idx = merged.index(cor_val)
-        except ValueError:
-            if isinstance(cor_val, str):
-                cs = cor_val.strip()
-                for i, a in enumerate(merged):
-                    if isinstance(a, str) and a.strip() == cs:
-                        idx = i
-                        break
-
-    # shuffle determinístico por item
-    if seed is not None and len(merged) > 1:
+    # Embaralhamento determinístico por item (id + enunciado + tamanho), baseado em seed
+    if seed is not None and len(alts_shuffled) > 1:
         rng = _rng_for_item(seed, q)
-        order = list(range(len(merged)))
-        rng.shuffle(order)
-        merged_shuf = [merged[i] for i in order]
-        if idx is not None:
-            idx = order.index(idx)
-        merged = merged_shuf
+        rng.shuffle(alts_shuffled)
 
-    # persistir novos valores
-    q["alternativas"] = merged
-    if idx is not None:
-        q["correta"] = (int(idx), merged[idx])  # tupla (indice, valor)
+    q["alternativas"] = alts_shuffled
+    # 'correta' permanece exatamente como veio (sem tupla / sem merge)
