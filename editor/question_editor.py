@@ -477,6 +477,7 @@ class QuestionEditor(tk.Toplevel):
 
         # espaçador no final para o scroll parar melhor
         ttk.Frame(self.form_frame, height=10).grid(row=row, column=0, sticky="ew")
+        self._refresh_field_toolbar()
 
     # ----------------- coleta e validações -----------------
     def _text_to_lines(self, txt: tk.Text) -> List[str]:
@@ -554,6 +555,8 @@ class QuestionEditor(tk.Toplevel):
             self.lbl_pos.configure(text=f"Questão {self.idx + 1} de {len(self.data)}")
             self._populate_dropdown()
             self.var_dirty.set(False)
+
+            self._refresh_field_toolbar()
 
             # Preview sempre atualizado
             self.update_preview()
@@ -804,4 +807,30 @@ class QuestionEditor(tk.Toplevel):
             self._refresh_field_toolbar()
         except Exception as e:
             messagebox.showerror(APP_TITLE, f"Não foi possível remover o campo:\n{e}", parent=self)
+            
+    def _refresh_field_toolbar(self):
+        # Se ainda não construiu a toolbar, só retorna
+        if not hasattr(self, "cmb_field") or not hasattr(self, "btn_field_delete"):
+            return
+
+        if not getattr(self, "data", None):
+            self.cmb_field["values"] = []
+            self.cmb_field.set("")
+            self.btn_field_delete.state(["disabled"])
+            return
+
+        q = self.data[self.idx]
+        keys = list(q.keys())
+        show_keys = [k for k in keys if k != "id"]
+
+        self.cmb_field["values"] = show_keys
+
+        cur = self.cmb_field.get()
+        if cur not in show_keys:
+            self.cmb_field.set(show_keys[0] if show_keys else "")
+
+        if self.cmb_field.get():
+            self.btn_field_delete.state(["!disabled"])
+        else:
+            self.btn_field_delete.state(["disabled"])
             
