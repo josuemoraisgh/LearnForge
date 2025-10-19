@@ -111,24 +111,40 @@ class QuestionEditor(tk.Toplevel):
 
     # ----------------- UI (tabs + formulário com scroll) -----------------
     def _build_notebook(self):
-        self.nb = ttk.Notebook(self, padding=(10, 10, 10, 10))
+        self.nb = ttk.Notebook(self)
         self.nb.grid(row=1, column=0, sticky="nsew")
+        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
 
-        # -------- Formulário (scrollable) --------
+        # --------------- Aba: Formulário ---------------
         self.tab_form = ttk.Frame(self.nb)
         self.nb.add(self.tab_form, text="Formulário")
         self.tab_form.columnconfigure(0, weight=1)
-        self.tab_form.rowconfigure(1, weight=1)  # linha 1 = container scroll (abaixo da toolbar)
+        self.tab_form.rowconfigure(1, weight=1)  # <- o container do form fica na linha 1
 
+
+        # -------- Formulário (scrollable) --------
         # Toolbar PEDIDA dentro da aba Formulário (no topo)
         toolbar = ttk.Frame(self.tab_form, padding=(2, 6, 2, 8))
         toolbar.grid(row=0, column=0, sticky="ew")
-        toolbar.columnconfigure(0, weight=1)
-        # Grupo de botões alinhados à esquerda
-        btn_group = ttk.Frame(toolbar)
-        btn_group.grid(row=0, column=0, sticky="w")
-        ttk.Button(btn_group, text="Inserir", command=self._insert_field_menu).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_group, text="Remover", command=self._remove_field_selected).pack(side="left")
+        toolbar.columnconfigure(0, weight=0)
+        toolbar.columnconfigure(1, weight=1)
+        toolbar.columnconfigure(2, weight=0)
+        toolbar.columnconfigure(3, weight=0)
+
+        # Combobox para escolher o campo a excluir
+        ttk.Label(toolbar, text="Campo:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.cmb_field = ttk.Combobox(toolbar, state="readonly", width=28)
+        self.cmb_field.grid(row=0, column=1, sticky="w")
+
+        # Botões (criar SEM encadear .grid/.pack)
+        self.btn_field_insert = ttk.Button(toolbar, text="Inserir", command=self._insert_field_menu)
+        self.btn_field_insert.grid(row=0, column=2, padx=(12, 6))
+
+        self.btn_field_delete = ttk.Button(toolbar, text="Excluir", command=self._remove_field_selected)
+        self.btn_field_delete.grid(row=0, column=3)
+        self.btn_field_delete.state(["disabled"])
+
 
         # Container com canvas + scrollbar (formulário)
         container = ttk.Frame(self.tab_form)
@@ -373,7 +389,7 @@ class QuestionEditor(tk.Toplevel):
             bar.columnconfigure(1, weight=0)
             bar.columnconfigure(2, weight=1)
 
-            btn_ins = ttk.Button(bar, text="Insert Line")
+            btn_field_insert = ttk.Button(bar, text="Insert Line")
             btn_del = ttk.Button(bar, text="Delete Line")
 
             def _regrid_rows():
@@ -421,13 +437,13 @@ class QuestionEditor(tk.Toplevel):
                     self._mark_dirty()
                     _regrid_rows()
 
-            btn_ins.configure(command=_insert_line)
+            btn_field_insert.configure(command=_insert_line)
             btn_del.configure(command=_delete_line)
 
             # estado inicial: delete desabilitado
             btn_del.state(["disabled"])
 
-            btn_ins.grid(row=0, column=0, padx=(0, 6))
+            btn_field_insert.grid(row=0, column=0, padx=(0, 6))
             btn_del.grid(row=0, column=1, padx=(0, 6))
             ttk.Label(bar, text=" ").grid(row=0, column=2, sticky="ew")  # expansor
 
@@ -700,6 +716,7 @@ class QuestionEditor(tk.Toplevel):
             self._set_raw(raw_text)
         except Exception as e:
             self._set_raw(f"[raw falhou]: {e}")
+            
     def _refresh_field_toolbar(self):
         """Atualiza a combo de campos e o estado do botão Excluir."""
         if not self.data:
@@ -707,21 +724,21 @@ class QuestionEditor(tk.Toplevel):
             self.cmb_field.set("")
             self.btn_field_delete.state(["disabled"])
             return
+
         q = self.data[self.idx]
         keys = list(q.keys())
-        # Não oferecemos excluir 'id'
-        show_keys = [k for k in keys if k != "id"]
+        show_keys = [k for k in keys if k != "id"]  # não permitimos excluir 'id'
         self.cmb_field["values"] = show_keys
-        # mantém seleção válida
+
         cur = self.cmb_field.get()
         if cur not in show_keys:
             self.cmb_field.set(show_keys[0] if show_keys else "")
-        # botão excluir habilita apenas se houver seleção
+
         if self.cmb_field.get():
             self.btn_field_delete.state(["!disabled"])
         else:
-            self.btn_field_delete.state(["disabled"])            
-
+            self.btn_field_delete.state(["disabled"])
+           
     def _insert_field_menu(self):
         """Abre um menu com campos faltantes; ao clicar insere com valor padrão."""
         if not self.data:
@@ -729,36 +746,36 @@ class QuestionEditor(tk.Toplevel):
         q = self.data[self.idx]
         existing = set(q.keys())
 
-        # Quais estão faltando?
-        missing = [k for k in self._ALLOWED_FIELDS_DEFAULTS.keys() if k not in existing]
-
+        missing = [k for k in _ALLOWED_FIELDS_DEFAULTS.keys() if k not in existing]
         if not missing:
             messagebox.showinfo(APP_TITLE, "Não há campos disponíveis para inserir.", parent=self)
             return
 
-        # Menu popup posicionado abaixo do botão Inserir
         menu = tk.Menu(self, tearoff=False)
         for name in missing:
             def _add_field(n=name):
-                q[n] = deepcopy(self._ALLOWED_FIELDS_DEFAULTS[n])
+                q[n] = deepcopy(_ALLOWED_FIELDS_DEFAULTS[n])
                 self.var_dirty.set(True)
-                # Recarrega formulário & toolbar
                 self._render_form_for_question(q)
                 self._refresh_field_toolbar()
-                # Seleciona automaticamente o novo campo na combo
                 self.cmb_field.set(n)
                 self.btn_field_delete.state(["!disabled"])
             menu.add_command(label=name, command=_add_field)
 
-        # coordenadas do botão
-        bx = self.btn_field_insert.winfo_rootx()
-        by = self.btn_field_insert.winfo_rooty() + self.btn_field_insert.winfo_height()
+        # Coordenadas do botão (com fallback caso não esteja mapeado ainda)
+        try:
+            bx = self.btn_field_insert.winfo_rootx()
+            by = self.btn_field_insert.winfo_rooty() + self.btn_field_insert.winfo_height()
+        except Exception:
+            bx = self.winfo_rootx() + 100
+            by = self.winfo_rooty() + 80
+
         try:
             menu.tk_popup(bx, by)
         finally:
             menu.grab_release()
 
-    def _remover_field_selected(self):
+    def _remove_field_selected(self):
         """Remove o campo selecionado na combo (exceto 'id')."""
         if not self.data:
             return
