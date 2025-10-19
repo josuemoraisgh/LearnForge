@@ -147,7 +147,8 @@ class App(ttk.Frame):
 
         # --- TAB QUIZ ---
         self.tab_quiz = ttk.Frame(nb, padding=6)
-        nb.add(self.tab_quiz, text="Beamer")
+        nb.add(self.tab_quiz, text="Slide")
+        self.tab_quiz.columnconfigure(0, weight=1)
 
         out = ttk.LabelFrame(self.tab_quiz, text="Saída", padding=8)
         out.grid(row=0, column=0, sticky="ew", pady=(0,10))
@@ -190,11 +191,19 @@ class App(ttk.Frame):
 
         # --- TAB TEST ---
         self.tab_test = ttk.Frame(nb, padding=6)
-        nb.add(self.tab_test, text="Test")
+        nb.add(self.tab_test, text="Prova")
+        # 🔧 Expansão total da aba Test
+        self.tab_test.columnconfigure(0, weight=1)
+        self.tab_test.rowconfigure(0, weight=0)
+        self.tab_test.rowconfigure(1, weight=0)
+        self.tab_test.rowconfigure(2, weight=1)
 
+        # Arquivos / caminhos
         t_files = ttk.LabelFrame(self.tab_test, text="Template e Saída", padding=8)
-        t_files.grid(row=0, column=0, sticky="ew", pady=(0,10))
-        t_files.columnconfigure(1, weight=1)
+        t_files.grid(row=0, column=0, sticky="nsew", pady=(0,10))  # nsew para expandir
+        t_files.columnconfigure(0, weight=0)
+        t_files.columnconfigure(1, weight=1)  # coluna da Entry se expande
+        t_files.columnconfigure(2, weight=0)
 
         ttk.Label(t_files, text="Template (.docx):").grid(row=0, column=0, sticky="w", padx=(6,2), pady=6)
         ttk.Entry(t_files, textvariable=self.var_template).grid(row=0, column=1, sticky="ew", padx=(0,6), pady=6)
@@ -204,16 +213,22 @@ class App(ttk.Frame):
         ttk.Entry(t_files, textvariable=self.var_output_docx, state="readonly").grid(row=1, column=1, sticky="ew", padx=(0,6), pady=6)
         ttk.Button(t_files, text="Abrir Pasta", command=self.open_output_dir_docx).grid(row=1, column=2, padx=(0,6))
 
+        # Opções
         t_opts = ttk.LabelFrame(self.tab_test, text="Opções da Prova", padding=8)
-        t_opts.grid(row=1, column=0, sticky="ew")
-        t_opts.columnconfigure(1, weight=1)
+        t_opts.grid(row=1, column=0, sticky="nsew")  # nsew para ocupar largura
+        # permitir que entradas (colunas 1 e 3) se expandam
+        for c in range(4):
+            t_opts.columnconfigure(c, weight=(1 if c in (1,3) else 0))
+
         ttk.Label(t_opts, text="Nº de questões:").grid(row=0, column=0, sticky="w", padx=(6,2), pady=6)
         ttk.Spinbox(t_opts, from_=1, to=100, textvariable=self.var_total_q, width=6).grid(row=0, column=1, sticky="w", pady=6)
         ttk.Label(t_opts, text="Seed (opcional):").grid(row=0, column=2, sticky="w", padx=(12,2))
-        ttk.Entry(t_opts, textvariable=self.var_seed_test, width=12).grid(row=0, column=3, sticky="w")
+        ttk.Entry(t_opts, textvariable=self.var_seed_test).grid(row=0, column=3, sticky="ew")
+
         ttk.Label(t_opts, text="Placeholder no template:").grid(row=1, column=0, sticky="w", padx=(6,2))
         ttk.Entry(t_opts, textvariable=self.var_placeholder).grid(row=1, column=1, columnspan=3, sticky="ew")
 
+        # Ações
         t_actions = ttk.Frame(self.tab_test, padding=(0,8,0,0))
         t_actions.grid(row=2, column=0, sticky="ew")
         ttk.Button(t_actions, text="Gerar Prova (.docx)", command=self.on_run_docx, style="Accent.TButton").pack(side="left")

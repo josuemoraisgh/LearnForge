@@ -10,6 +10,10 @@ Editor de Questões (Tk + ttk) — formulário genérico com scrollbar e largura
 - Todos os frames se expandem na largura disponível (canvas ajusta o inner frame).
 - Ordem dos campos = ordem das chaves no JSON.
 - Preview integrado ao core (editor.preview.preview_text).
+
+>>> Alteração solicitada:
+- Remover os botões "Novo", "Salvar (Ctrl+S)", "Clonar" e "Excluir" da topbar.
+- Inserir esses botões no INÍCIO da aba "Formulário".
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from typing import Any, Dict, List, Tuple
 
 from core.loader import load_quiz
 from editor.preview import preview_text
+from editor.raw import format_question_json
 
 APP_TITLE = "Editor de Questões (JSON)"
 DIFF_OPTIONS = ["fácil", "média", "difícil"]
@@ -71,6 +76,7 @@ class QuestionEditor(tk.Toplevel):
     def _build_topbar(self):
         bar = ttk.Frame(self, padding=(10, 10, 10, 10))
         bar.grid(row=0, column=0, sticky="ew")
+        # layout: [◀][▶][Ir para][Combo expandida][pos]
         bar.columnconfigure(3, weight=1)
 
         ttk.Button(bar, text="◀", width=3, command=self.prev).grid(row=0, column=0, padx=(0, 4))
@@ -81,13 +87,8 @@ class QuestionEditor(tk.Toplevel):
         self.cmb_go.grid(row=0, column=3, sticky="ew", padx=(6, 10))
         self.cmb_go.bind("<<ComboboxSelected>>", self.on_go_selected)
 
-        ttk.Button(bar, text="Novo", command=self.new_after_current).grid(row=0, column=4, padx=4)
-        ttk.Button(bar, text="Salvar (Ctrl+S)", command=self.save).grid(row=0, column=5, padx=4)
-        ttk.Button(bar, text="Clonar", command=self.clone_current).grid(row=0, column=6, padx=4)
-        ttk.Button(bar, text="Excluir", command=self.delete_current).grid(row=0, column=7, padx=4)
-
         self.lbl_pos = ttk.Label(bar, text="—")
-        self.lbl_pos.grid(row=0, column=8, padx=(10, 0))
+        self.lbl_pos.grid(row=0, column=4, padx=(10, 0))
 
     # ----------------- UI (tabs + formulário com scroll) -----------------
     def _build_notebook(self):
@@ -98,10 +99,23 @@ class QuestionEditor(tk.Toplevel):
         self.tab_form = ttk.Frame(self.nb)
         self.nb.add(self.tab_form, text="Formulário")
         self.tab_form.columnconfigure(0, weight=1)
-        self.tab_form.rowconfigure(0, weight=1)
+        self.tab_form.rowconfigure(1, weight=1)  # linha 1 = container scroll (abaixo da toolbar)
 
+        # Toolbar PEDIDA dentro da aba Formulário (no topo)
+        toolbar = ttk.Frame(self.tab_form, padding=(2, 6, 2, 8))
+        toolbar.grid(row=0, column=0, sticky="ew")
+        toolbar.columnconfigure(0, weight=1)
+        # Grupo de botões alinhados à esquerda
+        btn_group = ttk.Frame(toolbar)
+        btn_group.grid(row=0, column=0, sticky="w")
+        ttk.Button(btn_group, text="Novo", command=self.new_after_current).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_group, text="Salvar (Ctrl+S)", command=self.save).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_group, text="Clonar", command=self.clone_current).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_group, text="Excluir", command=self.delete_current).pack(side="left")
+
+        # Container com canvas + scrollbar (formulário)
         container = ttk.Frame(self.tab_form)
-        container.grid(row=0, column=0, sticky="nsew")
+        container.grid(row=1, column=0, sticky="nsew")
         container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
 
@@ -124,7 +138,6 @@ class QuestionEditor(tk.Toplevel):
 
         # Ajusta a largura do inner frame para ocupar 100% da área visível do CANVAS
         def _resize_inner(ev=None):
-            # event.width dá a largura exata da área visível do canvas
             width = ev.width if ev and hasattr(ev, "width") else self.form_canvas.winfo_width()
             if width > 0:
                 self.form_canvas.itemconfig(self._form_window_id, width=width)
@@ -151,6 +164,39 @@ class QuestionEditor(tk.Toplevel):
         self.nb.bind(
             "<<NotebookTabChanged>>",
             lambda e: (self.update_preview() if self.nb.select() == str(self.tab_prev) else None),
+        )
+
+        # -------- Raw (JSON da questão atual) --------
+        self.tab_raw = ttk.Frame(self.nb)
+        self.nb.add(self.tab_raw, text="Raw")
+        self.tab_raw.columnconfigure(0, weight=1)
+        self.tab_raw.rowconfigure(0, weight=1)
+
+        raw_container = ttk.Frame(self.tab_raw)
+        raw_container.grid(row=0, column=0, sticky="nsew")
+        raw_container.columnconfigure(0, weight=1)
+        raw_container.rowconfigure(0, weight=1)
+
+        self.txt_raw = tk.Text(raw_container, wrap="none", state="disabled")
+        self.txt_raw.grid(row=0, column=0, sticky="nsew")
+
+        # barras de rolagem horizontais e verticais
+        raw_vsb = ttk.Scrollbar(raw_container, orient="vertical", command=self.txt_raw.yview)
+        raw_vsb.grid(row=0, column=1, sticky="ns")
+        raw_hsb = ttk.Scrollbar(raw_container, orient="horizontal", command=self.txt_raw.xview)
+        raw_hsb.grid(row=1, column=0, sticky="ew")
+        self.txt_raw.configure(yscrollcommand=raw_vsb.set, xscrollcommand=raw_hsb.set)
+
+        try:
+            import tkinter.font as tkfont
+            self.txt_raw.configure(font=tkfont.nametofont("TkFixedFont"))
+        except Exception:
+            pass
+
+        # Atualiza o Raw quando a aba for selecionada
+        self.nb.bind(
+            "<<NotebookTabChanged>>",
+            lambda e: (self.update_raw() if self.nb.select() == str(self.tab_raw) else None),
         )
 
     # ----------------- navegação -----------------
@@ -381,6 +427,9 @@ class QuestionEditor(tk.Toplevel):
             if not self.data:
                 self._clear_form()
                 self._set_preview("(sem conteúdo)")
+                # mantém Raw coerente quando não há dados
+                if hasattr(self, "tab_raw") and self.nb.select() == str(self.tab_raw):
+                    self._set_raw("(sem conteúdo)")
                 return
 
             q = self.data[self.idx]
@@ -390,9 +439,15 @@ class QuestionEditor(tk.Toplevel):
             self._populate_dropdown()
             self.var_dirty.set(False)
 
+            # Preview sempre atualizado
             self.update_preview()
+
+            # Se a aba atual for Raw, atualiza também o JSON formatado
+            if hasattr(self, "tab_raw") and self.nb.select() == str(self.tab_raw):
+                self.update_raw()
         finally:
             self._loading = False
+
 
     def collect_form(self) -> Dict[str, Any]:
         if not self.data:
@@ -522,10 +577,27 @@ class QuestionEditor(tk.Toplevel):
         except Exception:
             q = self.data[self.idx]
 
-        qs = deepcopy(self.data)
-        qs[self.idx] = deepcopy(q)
+        # Mostra somente a questão corrente no preview
         try:
-            text_core = preview_text(qs, title="Pré-visualização")
+            text_core = preview_text([deepcopy(q)], title="Pré-visualização")
             self._set_preview(text_core.strip() or "(sem conteúdo)")
         except Exception as e:
             self._set_preview(f"[preview via core falhou]: {e}")
+
+    def _set_raw(self, text: str):
+        self.txt_raw.configure(state="normal")
+        self.txt_raw.delete("1.0", "end")
+        self.txt_raw.insert("1.0", text or "")
+        self.txt_raw.configure(state="disabled")
+
+    def update_raw(self):
+        """Renderiza o JSON da questão atual com identação e acentos preservados."""
+        try:
+            q = self.collect_form()
+        except Exception:
+            q = self.data[self.idx]
+        try:
+            raw_text = format_question_json(q)
+            self._set_raw(raw_text)
+        except Exception as e:
+            self._set_raw(f"[raw falhou]: {e}")
