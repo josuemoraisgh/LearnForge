@@ -30,8 +30,22 @@ from editor.raw import format_question_json
 
 APP_TITLE = "Editor de Questões (JSON)"
 DIFF_OPTIONS = ["fácil", "média", "difícil"]
-
-
+# -------- Campos que podem ser inseridos automaticamente e seus valores padrão --------
+_ALLOWED_FIELDS_DEFAULTS = {
+    # básicos
+    "dificuldade": "média",
+    "enunciado": "",
+    "subenunciado": "",
+    "imagens": [],
+    "alternativas": [],
+    "correta": "",
+    "obs": [],
+    # de uso avançado (caso utilize)
+    "afirmacoes": {},     # ex.: {"I": "", "II": ""}
+    "variaveis": {},      # core valida formato no momento da resolução
+    "resolucoes": {},     # idem
+    # "id" propositalmente fora para não ser inserido/excluído por aqui
+}
 class QuestionEditor(tk.Toplevel):
     def __init__(self, master, json_path, on_saved=None):
         super().__init__(master)
@@ -74,9 +88,8 @@ class QuestionEditor(tk.Toplevel):
 
     # ----------------- UI (barra superior) -----------------
     def _build_topbar(self):
-        bar = ttk.Frame(self, padding=(10, 10, 10, 10))
+        bar = ttk.Frame(self, padding=(10,10,10,10))
         bar.grid(row=0, column=0, sticky="ew")
-        # layout: [◀][▶][Ir para][Combo expandida][pos]
         bar.columnconfigure(3, weight=1)
 
         ttk.Button(bar, text="◀", width=3, command=self.prev).grid(row=0, column=0, padx=(0, 4))
@@ -87,8 +100,14 @@ class QuestionEditor(tk.Toplevel):
         self.cmb_go.grid(row=0, column=3, sticky="ew", padx=(6, 10))
         self.cmb_go.bind("<<ComboboxSelected>>", self.on_go_selected)
 
+        ttk.Button(bar, text="Novo", command=self.new_after_current).grid(row=0, column=4, padx=4)
+        ttk.Button(bar, text="Salvar (Ctrl+S)", command=self.save).grid(row=0, column=5, padx=4)
+        ttk.Button(bar, text="Clonar", command=self.clone_current).grid(row=0, column=6, padx=4)
+        ttk.Button(bar, text="Excluir", command=self.delete_current).grid(row=0, column=7, padx=4)
+
         self.lbl_pos = ttk.Label(bar, text="—")
-        self.lbl_pos.grid(row=0, column=4, padx=(10, 0))
+        self.lbl_pos.grid(row=0, column=8, padx=(10, 0))
+
 
     # ----------------- UI (tabs + formulário com scroll) -----------------
     def _build_notebook(self):
@@ -108,10 +127,8 @@ class QuestionEditor(tk.Toplevel):
         # Grupo de botões alinhados à esquerda
         btn_group = ttk.Frame(toolbar)
         btn_group.grid(row=0, column=0, sticky="w")
-        ttk.Button(btn_group, text="Novo", command=self.new_after_current).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_group, text="Salvar (Ctrl+S)", command=self.save).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_group, text="Clonar", command=self.clone_current).pack(side="left", padx=(0, 6))
-        ttk.Button(btn_group, text="Excluir", command=self.delete_current).pack(side="left")
+        ttk.Button(btn_group, text="Inserir", command=self._insert_field_menu).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_group, text="Remover", command=self._remove_field_selected).pack(side="left")
 
         # Container com canvas + scrollbar (formulário)
         container = ttk.Frame(self.tab_form)
@@ -683,3 +700,89 @@ class QuestionEditor(tk.Toplevel):
             self._set_raw(raw_text)
         except Exception as e:
             self._set_raw(f"[raw falhou]: {e}")
+    def _refresh_field_toolbar(self):
+        """Atualiza a combo de campos e o estado do botão Excluir."""
+        if not self.data:
+            self.cmb_field["values"] = []
+            self.cmb_field.set("")
+            self.btn_field_delete.state(["disabled"])
+            return
+        q = self.data[self.idx]
+        keys = list(q.keys())
+        # Não oferecemos excluir 'id'
+        show_keys = [k for k in keys if k != "id"]
+        self.cmb_field["values"] = show_keys
+        # mantém seleção válida
+        cur = self.cmb_field.get()
+        if cur not in show_keys:
+            self.cmb_field.set(show_keys[0] if show_keys else "")
+        # botão excluir habilita apenas se houver seleção
+        if self.cmb_field.get():
+            self.btn_field_delete.state(["!disabled"])
+        else:
+            self.btn_field_delete.state(["disabled"])            
+
+    def _insert_field_menu(self):
+        """Abre um menu com campos faltantes; ao clicar insere com valor padrão."""
+        if not self.data:
+            return
+        q = self.data[self.idx]
+        existing = set(q.keys())
+
+        # Quais estão faltando?
+        missing = [k for k in self._ALLOWED_FIELDS_DEFAULTS.keys() if k not in existing]
+
+        if not missing:
+            messagebox.showinfo(APP_TITLE, "Não há campos disponíveis para inserir.", parent=self)
+            return
+
+        # Menu popup posicionado abaixo do botão Inserir
+        menu = tk.Menu(self, tearoff=False)
+        for name in missing:
+            def _add_field(n=name):
+                q[n] = deepcopy(self._ALLOWED_FIELDS_DEFAULTS[n])
+                self.var_dirty.set(True)
+                # Recarrega formulário & toolbar
+                self._render_form_for_question(q)
+                self._refresh_field_toolbar()
+                # Seleciona automaticamente o novo campo na combo
+                self.cmb_field.set(n)
+                self.btn_field_delete.state(["!disabled"])
+            menu.add_command(label=name, command=_add_field)
+
+        # coordenadas do botão
+        bx = self.btn_field_insert.winfo_rootx()
+        by = self.btn_field_insert.winfo_rooty() + self.btn_field_insert.winfo_height()
+        try:
+            menu.tk_popup(bx, by)
+        finally:
+            menu.grab_release()
+
+    def _remover_field_selected(self):
+        """Remove o campo selecionado na combo (exceto 'id')."""
+        if not self.data:
+            return
+        field = self.cmb_field.get().strip()
+        if not field:
+            return
+        if field == "id":
+            messagebox.showwarning(APP_TITLE, "O campo 'id' não pode ser excluído.", parent=self)
+            return
+
+        q = self.data[self.idx]
+        if field not in q:
+            self._refresh_field_toolbar()
+            return
+
+        if not messagebox.askyesno(APP_TITLE, f"Remover o campo '{field}' desta questão?", parent=self):
+            return
+
+        try:
+            q.pop(field, None)
+            self.var_dirty.set(True)
+            # Recarrega formulário & toolbar
+            self._render_form_for_question(q)
+            self._refresh_field_toolbar()
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, f"Não foi possível remover o campo:\n{e}", parent=self)
+            
