@@ -10,7 +10,6 @@ Janela principal com abas (Beamer / Test).
 import io
 import json
 import shutil
-import subprocess
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
@@ -18,7 +17,6 @@ from tkinter import ttk, filedialog, messagebox, colorchooser
 import tkinter.font as tkfont
 import sys
 import threading
-import importlib.util
 
 # DnD opcional (gracioso)
 try:

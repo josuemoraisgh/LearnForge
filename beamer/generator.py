@@ -20,8 +20,6 @@ from __future__ import annotations
 from typing import List, Dict, Any
 from pathlib import Path
 import re
-
-# resolvedor (Tipo 3: variáveis, resoluções e substituições <...>)
 from core import load_quiz
 
 # --------------------------------------------------------------------
@@ -29,36 +27,6 @@ from core import load_quiz
 # --------------------------------------------------------------------
 
 IMG_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.pdf')
-
-def _alts_final(q: Dict[str, Any]) -> List[str]:
-    """
-    Retorna a lista FINAL de alternativas (merge + aleatoriedade) do pipeline:
-    - Prioriza q["alternativas"]
-    - Se não existir, cai para a primeira 'alternativas;K'
-    - Garante presença da 'correta' se por algum motivo ela não estiver
-    """
-    alts = None
-    if isinstance(q.get("alternativas"), list):
-        alts = list(q.get("alternativas") or [])
-    if alts is None:
-        for k, v in q.items():
-            if isinstance(k, str) and k.startswith("alternativas;") and isinstance(v, list):
-                alts = list(v or [])
-                break
-    if alts is None:
-        alts = []
-    cor = (q.get("correta") or "").strip()
-    if cor and not any((a or "").strip() == cor for a in alts):
-        alts.append(cor)
-    # remove duplicatas preservando ordem
-    seen, out = set(), []
-    for a in alts:
-        key = (a or "").strip()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(a)
-    return out
 
 # "caminho;LxA" (mm)
 def _parse_img_spec(s: str):
@@ -72,15 +40,6 @@ def _parse_img_spec(s: str):
             return path.strip(), float(m.group(1)), float(m.group(2))
         return path.strip(), None, None
     return s.strip(), None, None
-
-def _read_text_any(p: Path) -> str:
-    b = p.read_bytes()
-    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin1"):
-        try:
-            return b.decode(enc)
-        except Exception:
-            pass
-    return b.decode("utf-8", errors="replace")
 
 def latex_escape(s: str) -> str:
     if s is None:
@@ -144,18 +103,17 @@ def render_afirmacoes_line(afirm: Dict[str, str]) -> str:
     safe = [latex_escape(x) for x in itens]
     return "\n".join([r"\begin{itemize}"] + [r"\item " + s for s in safe] + [r"\end{itemize}"])
 
-def render_alts_text(alts: List[str], correta: str, highlight: bool = False) -> str:
+def render_alts_text(alts: List[str], corretaIndex: int, highlight: bool = False) -> str:
     """
     Alternativas em texto, rotuladas a), b), c) ...; se highlight=True, \alert{correta}.
     """
     if not alts:
         return ""
     lines = [r"\begin{itemize}"]
-    cor = (correta or "").strip()
     for i, alt in enumerate(alts):
         label = _label(i)
         content = latex_escape(alt or "")
-        if highlight and (alt or "").strip() == cor:
+        if highlight and corretaIndex == i:
             content = r"\alert{" + content + "}"
         lines.append(r"\item[" + label + "] " + content)
     lines.append(r"\end{itemize}")
@@ -187,7 +145,7 @@ def render_alts_images(alts: List[str], base_dir: str | None = None) -> str:
 
 def render_alts_grid_beamer_from_list(
     alts: List[str],
-    correta: str,
+    corretaIndex: int,
     K: int | None,
     base_dir: str | None,
     highlight_correct: bool = False,
@@ -203,10 +161,9 @@ def render_alts_grid_beamer_from_list(
     n = len(alts)
     first, rest = K, n - K
     labels = [_label(i) for i in range(n)]
-    cor = (str(correta) or "").strip()
 
-    def _is_correct(a: str) -> bool:
-        return highlight_correct and bool(cor) and (str(a).strip() == cor)
+    def _is_correct(index: int) -> bool:
+        return (highlight_correct and corretaIndex == index)
 
     def _cell(i: int) -> str:
         a = alts[i]
@@ -229,7 +186,7 @@ def render_alts_grid_beamer_from_list(
 
         # Texto: aplica \alert apenas no texto quando for a correta
         text = latex_escape(str(a))
-        if _is_correct(a):
+        if _is_correct(i):
             text = r"\alert{" + text + "}"
 
         return r"\centering " + lab + " " + text
@@ -251,10 +208,6 @@ def render_alts_grid_beamer_from_list(
 # --------------------------------------------------------------------
 # Gerador principal
 # --------------------------------------------------------------------
-
-def _load_json_list(p: str) -> list[dict]:
-    return load_quiz(p).get('questions', [])
-
 def json2beamer(
     input_json='assets/questoes_template.json',
     output_tex='assets/questoes_template_slides.tex',
@@ -263,9 +216,6 @@ def json2beamer(
     fsq='Large',
     fsa='normalsize',
     alert_color='red',             # compatibilidade; \alert usa a cor do tema
-    resolve_vars=True,             # deixe True para core resolver variáveis
-    seed_for_vars=None,            # se None, usa a mesma seed do shuffle
-    vars_env=None,                 # dicionário extra para resolver variáveis, se precisar
     **kwargs
 ) -> int:
     """
@@ -283,10 +233,7 @@ def json2beamer(
         for p in input_json:
             ds = load_quiz(
                 p,
-                shuffle_seed=shuffle_seed,
-                resolve_vars=resolve_vars,
-                # seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
-                # vars_env=vars_env
+                shuffle_seed,
             )
             all_qs.extend(ds.get("questions", []))
         qs = all_qs
@@ -294,10 +241,7 @@ def json2beamer(
         base_dir = str(Path(input_json).parent.resolve())
         ds = load_quiz(
             input_json,
-            shuffle_seed=shuffle_seed,
-            resolve_vars=resolve_vars,
-            # seed_for_vars=(shuffle_seed if seed_for_vars is None else seed_for_vars),
-            # vars_env=vars_env
+            shuffle_seed,
         )
         qs = ds.get("questions", [])
 
@@ -385,14 +329,7 @@ def json2beamer(
         enun_tex = latex_escape(enun)
         tipo = int(q_res.get("tipo", 1))
         alts = q_res.get("alternativas", []) or []
-        correct_idx = q_res.get("correct_index")  # índice calculado pelo CORE
-        correta_val = None
-        if isinstance(correct_idx, int) and 0 <= correct_idx < len(alts):
-            correta_val = alts[correct_idx]
-        else:
-            # compat: se por algum motivo não veio, usa 'correta' (valor)
-            correta_val = q_res.get("correta", "")
-
+        correct_idx, _ = q_res.get("correta")  # índice calculado pelo CORE
         imgs = q_res.get("imagens") or []
 
         # ---------------- Frame 1: sem gabarito ----------------
@@ -417,12 +354,12 @@ def json2beamer(
             K = q_res.get('alternativas_firstrow')
             grid = render_alts_grid_beamer_from_list(
                 alts=alts,
-                correta=correta_val,
+                corretaIndex=correct_idx,
                 K=K,
                 base_dir=base_dir,
                 highlight_correct=False
             )
-            parts.append(grid if grid else render_alts_text(alts, correta_val, highlight=False))
+            parts.append(grid if grid else render_alts_text(alts, correct_idx, highlight=False))
 
         parts.append("}")
         parts.append("\\end{frame}\n")
@@ -449,12 +386,12 @@ def json2beamer(
             K = q_res.get('alternativas_firstrow')
             grid = render_alts_grid_beamer_from_list(
                 alts=alts,
-                correta=correta_val,
+                corretaIndex=correct_idx,
                 K=K,
                 base_dir=base_dir,
                 highlight_correct=True
             )
-            parts.append(grid if grid else render_alts_text(alts, correta_val, highlight=True))
+            parts.append(grid if grid else render_alts_text(alts, correct_idx, highlight=True))
 
         parts.append("}")
         parts.append("\\end{frame}\n")

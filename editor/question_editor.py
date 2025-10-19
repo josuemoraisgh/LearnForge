@@ -1,39 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-Editor de Questões (Tk + ttk)
-- Compatível com o JSON antigo (tipo, enunciado, alternativas, correta, variaveis/resolucoes, afirmacoes)
-- Preview integrado ao core para tipos 1/2/4; fallback do preview antigo para tipo 3.
+Editor de Questões (Tk + ttk) — formulário genérico com scrollbar e largura total.
+- Renderiza dinamicamente cada campo conforme o TIPO do valor:
+    int          -> Entry (1 linha)
+    'dificuldade'-> Combobox (fácil/média/difícil) [único caso especial]
+    str          -> Text (2 linhas)
+    list         -> Text (5 linhas) — 1 item por linha
+    dict         -> "tabela" 2 colunas (chave/valor), 5 linhas visíveis (colunas 1:3)
+- Todos os frames se expandem na largura disponível (canvas ajusta o inner frame).
+- Ordem dos campos = ordem das chaves no JSON.
+- Preview integrado ao core (editor.preview.preview_text).
 """
 
-import json, re, tkinter as tk
-from codecs import decode as _dec
+from __future__ import annotations
+import json
+import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 from copy import deepcopy
+from typing import Any, Dict, List, Tuple
 
-def _read_text_any(path: Path) -> str:
-    b = path.read_bytes()
-    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin1"):
-        try:
-            return b.decode(enc)
-        except Exception:
-            continue
-    return b.decode("utf-8", errors="replace")
-from copy import deepcopy
-
-# ==== utilitários existentes do seu projeto ====
-from .question_utils import ensure_lists, tipo_of
-
-# ==== core preview (para tipos 1/2/4) ====
-#  -> editor.preview.preview_text chama core.parsers.to_ir internamente
-try:
-    from editor.preview import preview_text as core_preview_text
-    _HAS_CORE_PREVIEW = True
-except Exception:
-    _HAS_CORE_PREVIEW = False
+from core.loader import load_quiz
+from editor.preview import preview_text
 
 APP_TITLE = "Editor de Questões (JSON)"
-ALPH = "abcdefghijklmnopqrstuvwxyz"
+DIFF_OPTIONS = ["fácil", "média", "difícil"]
 
 
 class QuestionEditor(tk.Toplevel):
@@ -45,30 +36,23 @@ class QuestionEditor(tk.Toplevel):
 
         self.json_path = Path(json_path)
         self.on_saved = on_saved
-        self._loading = False
 
-        # carrega JSON
+        # Carregar via core
         try:
-            from core.loader import load_quiz, QuizLoadError
             ds = load_quiz(self.json_path)
-            self.dataset = ds                       # dict padronizado
-            self.data = ds.get('questions', [])      # lista de questões
-            self.meta = ds.get('meta', {})           # metadados
+            self.dataset: Dict[str, Any] = ds
+            self.data: List[Dict[str, Any]] = ds.get("questions", [])
+            self.meta: Dict[str, Any] = ds.get("meta", {})
             if not isinstance(self.data, list):
-                raise ValueError('JSON não é um array de questões após normalização.')
+                raise ValueError("JSON não é uma lista de questões após normalização.")
         except Exception as e:
-            messagebox.showerror(APP_TITLE, f'Erro ao abrir JSON:{e}', parent=self)
+            messagebox.showerror(APP_TITLE, f"Erro ao abrir JSON:\n{e}", parent=self)
             self.destroy()
             return
 
         self.idx = 0
         self.var_dirty = tk.BooleanVar(value=False)
-        
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
-
-        self.idx = 0
-        self.var_dirty = tk.BooleanVar(value=False)
+        self._loading = False
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -83,9 +67,9 @@ class QuestionEditor(tk.Toplevel):
 
         self.load_current()
 
-    # ----------------- UI -----------------
+    # ----------------- UI (barra superior) -----------------
     def _build_topbar(self):
-        bar = ttk.Frame(self, padding=(10,10,10,10))
+        bar = ttk.Frame(self, padding=(10, 10, 10, 10))
         bar.grid(row=0, column=0, sticky="ew")
         bar.columnconfigure(3, weight=1)
 
@@ -105,84 +89,57 @@ class QuestionEditor(tk.Toplevel):
         self.lbl_pos = ttk.Label(bar, text="—")
         self.lbl_pos.grid(row=0, column=8, padx=(10, 0))
 
+    # ----------------- UI (tabs + formulário com scroll) -----------------
     def _build_notebook(self):
         self.nb = ttk.Notebook(self, padding=(10, 10, 10, 10))
         self.nb.grid(row=1, column=0, sticky="nsew")
 
-        # formulário
+        # -------- Formulário (scrollable) --------
         self.tab_form = ttk.Frame(self.nb)
         self.nb.add(self.tab_form, text="Formulário")
+        self.tab_form.columnconfigure(0, weight=1)
+        self.tab_form.rowconfigure(0, weight=1)
 
-        left = self.tab_form
-        left.columnconfigure(1, weight=1)
-        r = 0
-        PADY_LINHA = 6  # <-- espaçamento vertical entre linhas
+        container = ttk.Frame(self.tab_form)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
 
-        ttk.Label(left, text="ID:").grid(row=r, column=0, sticky="w", pady=(0, PADY_LINHA))
-        self.ent_id = ttk.Entry(left, width=10)
-        self.ent_id.grid(row=r, column=1, sticky="w", pady=(0, PADY_LINHA))
-        r += 1
+        self.form_canvas = tk.Canvas(container, highlightthickness=0)
+        self.form_canvas.grid(row=0, column=0, sticky="nsew")
 
-        ttk.Label(left, text="Tipo (1/2/3/4):").grid(row=r, column=0, sticky="w", pady=(0, PADY_LINHA))
-        self.cmb_tipo = ttk.Combobox(left, values=["1", "2", "3", "4"], state="readonly", width=6)
-        self.cmb_tipo.grid(row=r, column=1, sticky="w", pady=(0, PADY_LINHA))
-        r += 1
+        self.form_vsb = ttk.Scrollbar(container, orient="vertical", command=self.form_canvas.yview)
+        self.form_vsb.grid(row=0, column=1, sticky="ns")
+        self.form_canvas.configure(yscrollcommand=self.form_vsb.set)
 
-        ttk.Label(left, text="Dificuldade:").grid(row=r, column=0, sticky="w", pady=(0, PADY_LINHA))
-        self.cmb_diff = ttk.Combobox(left, values=["fácil", "média", "difícil"], state="readonly")
-        self.cmb_diff.grid(row=r, column=1, sticky="ew", pady=(0, PADY_LINHA))
-        r += 1
+        self.form_frame = ttk.Frame(self.form_canvas)
+        self.form_frame.columnconfigure(0, weight=1)  # <- permite que cada field ocupe a largura
+        # Atualiza a scrollregion ao crescer
+        self.form_frame.bind(
+            "<Configure>",
+            lambda e: self.form_canvas.configure(scrollregion=self.form_canvas.bbox("all")),
+        )
+        # Cria o frame dentro do canvas e guarda o window_id
+        self._form_window_id = self.form_canvas.create_window((0, 0), window=self.form_frame, anchor="nw")
 
-        ttk.Label(left, text="Enunciado:").grid(row=r, column=0, sticky="nw", pady=(0, PADY_LINHA))
-        self.txt_enun = tk.Text(left, height=2, wrap="word")
-        self.txt_enun.grid(row=r, column=1, sticky="nsew", pady=(0, PADY_LINHA))
-        left.rowconfigure(r, weight=1)
-        r += 1
+        # Ajusta a largura do inner frame para ocupar 100% da área visível do CANVAS
+        def _resize_inner(ev=None):
+            # event.width dá a largura exata da área visível do canvas
+            width = ev.width if ev and hasattr(ev, "width") else self.form_canvas.winfo_width()
+            if width > 0:
+                self.form_canvas.itemconfig(self._form_window_id, width=width)
+        self.form_canvas.bind("<Configure>", _resize_inner)
 
-        ttk.Label(left, text="Imagens:\n(uma por linha)").grid(row=r, column=0, sticky="nw", pady=(0, PADY_LINHA))
-        self.txt_imgs = tk.Text(left, height=3, wrap="none")
-        self.txt_imgs.grid(row=r, column=1, sticky="ew", pady=(0, PADY_LINHA))
-        r += 1
+        # Scroll do mouse (somente nesta aba)
+        def _on_mousewheel(event):
+            if self.nb.select() == str(self.tab_form):
+                self.form_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        self.form_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-        ttk.Label(left, text="Alternativas:\n(uma por linha)").grid(row=r, column=0, sticky="nw", pady=(0, PADY_LINHA))
-        self.txt_alts = tk.Text(left, height=10, wrap="word")
-        self.txt_alts.grid(row=r, column=1, sticky="nsew", pady=(0, PADY_LINHA))
-        left.rowconfigure(r, weight=2)
-        r += 1
+        # Dicionário de editores renderizados dinamicamente
+        self.editors: Dict[str, Dict[str, Any]] = {}
 
-        ttk.Label(left, text="Correta:").grid(row=r, column=0, sticky="w", pady=(0, PADY_LINHA))
-        self.ent_correct = ttk.Entry(left)
-        self.ent_correct.grid(row=r, column=1, sticky="ew", pady=(0, PADY_LINHA))
-        r += 1
-
-        # tipo 3 (variáveis e resoluções)
-        self.frm_tipo3 = ttk.LabelFrame(left, text="Tipo 3 – Variáveis & Resoluções")
-        self.frm_tipo3.columnconfigure(1, weight=1)
-        self.frm_tipo3.grid(row=r, column=0, columnspan=2, sticky="nsew", pady=(8, PADY_LINHA))
-        r += 1
-
-        ttk.Label(self.frm_tipo3, text="Variáveis: VAR=min:max:step (uma por linha)").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, PADY_LINHA))
-        self.txt_vars = tk.Text(self.frm_tipo3, height=4, wrap="none")
-        self.txt_vars.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, PADY_LINHA))
-
-        ttk.Label(self.frm_tipo3, text="Resoluções: NOME=expressão (uma por linha)").grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, PADY_LINHA))
-        self.txt_res = tk.Text(self.frm_tipo3, height=4, wrap="none")
-        self.txt_res.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, PADY_LINHA))
-
-        # tipo 4 (afirmações)
-        self.frm_tipo4 = ttk.LabelFrame(left, text="Tipo 4 – Afirmações (chave=texto)")
-        self.frm_tipo4.columnconfigure(0, weight=1)
-        self.txt_aff = tk.Text(self.frm_tipo4, height=6, wrap="word")
-        self.txt_aff.grid(row=0, column=0, sticky="nsew", pady=(0, PADY_LINHA))
-        self.frm_tipo4.grid(row=r, column=0, columnspan=2, sticky="nsew", pady=(8, PADY_LINHA))
-        r += 1
-
-        ttk.Label(left, text="Observações:\n(uma linha por item)").grid(row=r, column=0, sticky="nw", pady=(0, PADY_LINHA))
-        self.txt_obs = tk.Text(left, height=4, wrap="word")
-        self.txt_obs.grid(row=r, column=1, sticky="ew", pady=(0, PADY_LINHA))
-        r += 1
-
-        # preview
+        # -------- Preview --------
         self.tab_prev = ttk.Frame(self.nb)
         self.nb.add(self.tab_prev, text="Preview")
         self.tab_prev.columnconfigure(0, weight=1)
@@ -191,17 +148,10 @@ class QuestionEditor(tk.Toplevel):
         self.txt_preview = tk.Text(self.tab_prev, height=24, wrap="word", state="disabled")
         self.txt_preview.grid(row=0, column=0, sticky="nsew")
 
-        # eventos p/ marcar alteração
-        for txt in (self.txt_enun, self.txt_imgs, self.txt_alts, self.txt_obs, self.txt_vars, self.txt_res, self.txt_aff):
-            txt.bind("<KeyRelease>", self._mark_dirty, add="+")
-
-        self.cmb_tipo.bind("<<ComboboxSelected>>", self._on_tipo_changed, add="+")
-        self.cmb_diff.bind("<<ComboboxSelected>>", self._mark_dirty, add="+")
-        self.ent_correct.bind("<KeyRelease>", self._mark_dirty, add="+")
-        self.ent_id.bind("<FocusOut>", lambda e: self._on_id_focusout(), add="+")
-        self.ent_id.bind("<Return>", lambda e: self._on_id_focusout(), add="+")
-
-        self.nb.bind("<<NotebookTabChanged>>", lambda e: (self.update_preview() if self.nb.select() == str(self.tab_prev) else None))
+        self.nb.bind(
+            "<<NotebookTabChanged>>",
+            lambda e: (self.update_preview() if self.nb.select() == str(self.tab_prev) else None),
+        )
 
     # ----------------- navegação -----------------
     def _on_close(self):
@@ -210,21 +160,10 @@ class QuestionEditor(tk.Toplevel):
                 return
         self.destroy()
 
-    def _confirm_unsaved(self):
-        if self.var_dirty.get():
-            return messagebox.askyesno(APP_TITLE, "Há alterações não salvas. Deseja descartar?", parent=self)
-        return True
-
-    def _mark_dirty(self, *_):
-        if getattr(self, "_loading", False):
-            return
-        self.var_dirty.set(True)
-
-    def _populate_dropdown(self):
-        items = [f"{q.get('id')} – {q.get('enunciado','')[:40].replace('\n',' ')}" for q in self.data]
-        self.cmb_go["values"] = items
-        if items:
-            self.cmb_go.current(self.idx)
+    def _confirm_unsaved(self) -> bool:
+        return (not self.var_dirty.get()) or messagebox.askyesno(
+            APP_TITLE, "Há alterações não salvas. Deseja descartar?", parent=self
+        )
 
     def on_go_selected(self, _=None):
         new_idx = self.cmb_go.current()
@@ -251,55 +190,203 @@ class QuestionEditor(tk.Toplevel):
         self.idx += 1
         self.load_current()
 
-    # ----------------- helpers de texto -----------------
-    def _set_text(self, txt: tk.Text, content: str):
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
-        txt.insert("1.0", content or "")
-        txt.configure(state="normal")
+    # ----------------- utils UI -----------------
+    def _mark_dirty(self, *_):
+        if self._loading:
+            return
+        self.var_dirty.set(True)
 
-    def _get_lines(self, txt: tk.Text):
-        raw = txt.get("1.0", "end").strip()
-        return [line for line in raw.splitlines()] if raw else []
+    def _populate_dropdown(self):
+        items = [f"{q.get('id')} – {str(q.get('enunciado','')).splitlines()[0][:60]}" for q in self.data]
+        self.cmb_go["values"] = items
+        if items:
+            self.cmb_go.current(self.idx)
+
+    def _clear_form(self):
+        for child in self.form_frame.winfo_children():
+            child.destroy()
+        self.editors.clear()
+
+    def _label_frame(self, parent, title: str):
+        frm = ttk.LabelFrame(parent, text=title)
+        frm.columnconfigure(0, weight=1)  # permite esticar horizontalmente
+        return frm
+
+    # ----------------- renderização dinâmica -----------------
+    def _render_field(self, row: int, key: str, value: Any):
+        """Cria um LabelFrame + widget adequado ao tipo do valor."""
+        # Caso especial: dificuldade (Combobox)
+        if key == "dificuldade":
+            frm = self._label_frame(self.form_frame, "Dificuldade")
+            frm.grid(row=row, column=0, sticky="nsew", pady=(0, 6))
+            cmb = ttk.Combobox(frm, values=DIFF_OPTIONS, state="readonly")
+            cmb.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
+            cmb.set(value if value in DIFF_OPTIONS else "média")
+            cmb.bind("<<ComboboxSelected>>", self._mark_dirty, add="+")
+            self.editors[key] = {"type": "dificuldade", "widget": cmb}
+            return
+
+        # int -> Entry
+        if isinstance(value, int):
+            frm = self._label_frame(self.form_frame, key.upper() if key == "id" else key)
+            frm.grid(row=row, column=0, sticky="nsew", pady=(0, 6))
+            ent = ttk.Entry(frm)
+            ent.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
+            ent.insert(0, str(value))
+            ent.bind("<KeyRelease>", self._mark_dirty, add="+")
+            self.editors[key] = {"type": "int", "widget": ent}
+            return
+
+        # str -> Text (2 linhas)
+        if isinstance(value, str):
+            frm = self._label_frame(self.form_frame, key.capitalize())
+            frm.grid(row=row, column=0, sticky="nsew", pady=(0, 6))
+            frm.rowconfigure(0, weight=1)
+            txt = tk.Text(frm, height=2, wrap="word")
+            txt.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+            txt.insert("1.0", value)
+            txt.bind("<KeyRelease>", self._mark_dirty, add="+")
+            self.editors[key] = {"type": "str", "widget": txt}
+            return
+
+        # list -> Text (5 linhas) — 1 item por linha
+        if isinstance(value, list):
+            frm = self._label_frame(self.form_frame, key.capitalize() + " (uma por linha)")
+            frm.grid(row=row, column=0, sticky="nsew", pady=(0, 6))
+            frm.rowconfigure(0, weight=1)
+            txt = tk.Text(frm, height=5, wrap="none")
+            txt.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+            txt.insert("1.0", "\n".join(str(x) for x in value))
+            txt.bind("<KeyRelease>", self._mark_dirty, add="+")
+            self.editors[key] = {"type": "list", "widget": txt}
+            return
+
+        # dict -> “tabela” (duas colunas, 1:3)
+        if isinstance(value, dict):
+            frm = self._label_frame(self.form_frame, key.capitalize() + " (chave = valor)")
+            frm.grid(row=row, column=0, sticky="nsew", pady=(0, 6))
+            # Proporção 1/3 x 2/3 usando pesos uniformes
+            frm.columnconfigure(0, weight=1, uniform="cols")
+            frm.columnconfigure(1, weight=3, uniform="cols")
+
+            items = list(value.items())  # ordem do JSON preservada
+            rows = max(5, len(items))
+
+            ttk.Label(frm, text="Chave").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 2))
+            ttk.Label(frm, text="Valor").grid(row=0, column=1, sticky="w", padx=6, pady=(6, 2))
+
+            row_entries: List[Tuple[ttk.Entry, ttk.Entry]] = []
+            for i in range(rows):
+                ek = ttk.Entry(frm)
+                ev = ttk.Entry(frm)
+                ek.grid(row=i + 1, column=0, sticky="ew", padx=6, pady=2)
+                ev.grid(row=i + 1, column=1, sticky="ew", padx=6, pady=2)
+                if i < len(items):
+                    k, v = items[i]
+                    ek.insert(0, str(k))
+                    ev.insert(0, str(v))
+                ek.bind("<KeyRelease>", self._mark_dirty, add="+")
+                ev.bind("<KeyRelease>", self._mark_dirty, add="+")
+                row_entries.append((ek, ev))
+
+            self.editors[key] = {"type": "dict", "rows": row_entries}
+            return
+
+        # fallback: tratar como string
+        frm = self._label_frame(self.form_frame, key.capitalize())
+        frm.grid(row=row, column=0, sticky="nsew", pady=(0, 6))
+        frm.rowconfigure(0, weight=1)
+        txt = tk.Text(frm, height=2, wrap="word")
+        txt.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        txt.insert("1.0", str(value))
+        txt.bind("<KeyRelease>", self._mark_dirty, add="+")
+        self.editors[key] = {"type": "str", "widget": txt}
+
+    def _render_form_for_question(self, q: Dict[str, Any]):
+        """Limpa e recria todos os campos conforme os valores atuais da questão (ordem do JSON)."""
+        self._clear_form()
+
+        # ordem exata do JSON (inserção)
+        ordered_keys = list(q.keys())
+        row = 0
+        for k in ordered_keys:
+            self._render_field(row, k, q.get(k))
+            row += 1
+
+        # espaçador no final para o scroll parar melhor
+        ttk.Frame(self.form_frame, height=10).grid(row=row, column=0, sticky="ew")
+
+    # ----------------- coleta e validações -----------------
+    def _text_to_lines(self, txt: tk.Text) -> List[str]:
+        raw = txt.get("1.0", "end").strip("\n")
+        if not raw.strip():
+            return []
+        return [line.rstrip("\n") for line in raw.splitlines()]
+
+    def _collect_from_editors(self, base: Dict[str, Any]) -> Dict[str, Any]:
+        q = dict(base)  # cópia rasa
+
+        for key, info in self.editors.items():
+            t = info["type"]
+
+            if t == "dificuldade":
+                q[key] = info["widget"].get().strip() or "média"
+
+            elif t == "int":
+                s = info["widget"].get().strip()
+                if s == "":
+                    q[key] = 0
+                else:
+                    try:
+                        q[key] = int(s)
+                    except Exception:
+                        raise ValueError(f"Campo '{key}': esperado inteiro.")
+
+            elif t == "str":
+                txt: tk.Text = info["widget"]
+                q[key] = txt.get("1.0", "end").strip()
+
+            elif t == "list":
+                txt: tk.Text = info["widget"]
+                q[key] = [l for l in self._text_to_lines(txt) if l.strip()]
+
+            elif t == "dict":
+                rows = info["rows"]
+                d: Dict[str, Any] = {}
+                for ek, ev in rows:
+                    k = ek.get().strip()
+                    v = ev.get().strip()
+                    if k:
+                        d[k] = v
+                if d:
+                    q[key] = d
+                else:
+                    q.pop(key, None)
+
+            else:
+                widget = info.get("widget")
+                if isinstance(widget, tk.Text):
+                    q[key] = widget.get("1.0", "end").strip()
+                elif hasattr(widget, "get"):
+                    q[key] = widget.get().strip()
+                else:
+                    q[key] = base.get(key)
+
+        return q
 
     # ----------------- carga/armazenamento -----------------
     def load_current(self):
         self._loading = True
         try:
+            if not self.data:
+                self._clear_form()
+                self._set_preview("(sem conteúdo)")
+                return
+
             q = self.data[self.idx]
-            ensure_lists(q)
+            self._render_form_for_question(q)
 
-            # form
-            self.ent_id.delete(0, "end")
-            self.ent_id.insert(0, str(q.get("id", "")))
-            self.cmb_tipo.set(str(tipo_of(q)))
-            self.cmb_diff.set(q.get("dificuldade", "média"))
-            self._set_text(self.txt_enun, q.get("enunciado", ""))
-            self._set_text(self.txt_imgs, "\n".join(q.get("imagens") or []))
-            self._set_text(self.txt_alts, "\n".join(q.get("alternativas") or []))
-            self.ent_correct.delete(0, "end")
-            self.ent_correct.insert(0, q.get("correta", ""))
-            self._set_text(self.txt_obs, "\n".join(q.get("obs") or []))
-
-            # tipo3
-            vars_lines = []
-            for name, cfg in (q.get("variaveis") or {}).items():
-                vars_lines.append(f"{name}={cfg.get('min',0)}:{cfg.get('max',0)}:{cfg.get('step',1)}")
-            self._set_text(self.txt_vars, "\n".join(vars_lines))
-
-            res_lines = []
-            for name, expr in (q.get("resolucoes") or {}).items():
-                res_lines.append(f"{name}={expr}")
-            self._set_text(self.txt_res, "\n".join(res_lines))
-
-            # tipo4
-            aff_lines = []
-            for k, v in (q.get("afirmacoes") or {}).items():
-                aff_lines.append(f"{k}={v}")
-            self._set_text(self.txt_aff, "\n".join(aff_lines))
-
-            self._toggle_panels(int(self.cmb_tipo.get()))
-            self.lbl_pos.configure(text=f"Questão {self.idx+1} de {len(self.data)}")
+            self.lbl_pos.configure(text=f"Questão {self.idx + 1} de {len(self.data)}")
             self._populate_dropdown()
             self.var_dirty.set(False)
 
@@ -307,132 +394,69 @@ class QuestionEditor(tk.Toplevel):
         finally:
             self._loading = False
 
-    def _toggle_panels(self, t: int):
-        (self.frm_tipo3.grid if t == 3 else self.frm_tipo3.grid_remove)()
-        (self.frm_tipo4.grid if t == 4 else self.frm_tipo4.grid_remove)()
+    def collect_form(self) -> Dict[str, Any]:
+        if not self.data:
+            raise ValueError("Não há questão para salvar.")
+        base = self.data[self.idx]
+        q = self._collect_from_editors(base)
 
-    def _on_tipo_changed(self, _=None):
-        try:
-            t = int(self.cmb_tipo.get())
-        except Exception:
-            t = tipo_of(self.data[self.idx])
-        self._toggle_panels(t)
-        self._mark_dirty()
-
-    def _on_id_focusout(self):
-        self._mark_dirty()
-
-    def collect_form(self):
-        q = self.data[self.idx]
-
-        # id
-        try:
-            new_id = int(self.ent_id.get().strip())
-            if new_id < 1:
-                raise ValueError
-        except Exception:
-            raise ValueError("ID inválido (use inteiro >= 1).")
-        q["id"] = new_id
-
-        # tipo/dificuldade
-        q["tipo"] = int(self.cmb_tipo.get()) if self.cmb_tipo.get() else tipo_of(q)
-        q["dificuldade"] = self.cmb_diff.get().strip() or "média"
-
-        # textos
-        q["enunciado"] = self.txt_enun.get("1.0", "end").strip()
-        q["imagens"] = [l for l in self._get_lines(self.txt_imgs) if l.strip()]
-        q["alternativas"] = [l for l in self._get_lines(self.txt_alts) if l.strip()]
-        q["correta"] = self.ent_correct.get().strip()
-        q["obs"] = [l for l in self._get_lines(self.txt_obs)]
-
-        # tipo3
-        if q["tipo"] == 3:
-            vs = {}
-            for line in self._get_lines(self.txt_vars):
-                if not line.strip():
-                    continue
-                if "=" not in line or ":" not in line:
-                    raise ValueError(f"Variável inválida: {line}")
-                name, rng = line.split("=", 1)
-                try:
-                    mn, mx, st = [float(x) for x in rng.split(":")]
-                    if st <= 0 or mn > mx:
-                        raise ValueError
-                except Exception:
-                    raise ValueError(f"Variável {name}: faixa inválida.")
-                vs[name.strip()] = {"min": mn, "max": mx, "step": st}
-            q["variaveis"] = vs
-
-            rs = {}
-            for line in self._get_lines(self.txt_res):
-                if "=" not in line:
-                    continue
-                name, expr = line.split("=", 1)
-                if name.strip() and expr.strip():
-                    rs[name.strip()] = expr.strip()
-            q["resolucoes"] = rs
-            q.pop("afirmacoes", None)
-
-        # tipo4
-        elif q["tipo"] == 4:
-            aff = {}
-            for line in self._get_lines(self.txt_aff):
-                if "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                if k.strip() and v.strip():
-                    aff[k.strip()] = v.strip()
-            q["afirmacoes"] = aff
-            q.pop("variaveis", None)
-            q.pop("resolucoes", None)
-
+        # Validações mínimas
+        if "id" in q:
+            if not isinstance(q["id"], int) or q["id"] < 1:
+                raise ValueError("ID inválido (use inteiro >= 1).")
         else:
-            q.pop("variaveis", None)
-            q.pop("resolucoes", None)
-            q.pop("afirmacoes", None)
+            raise ValueError("Campo 'id' obrigatório.")
+
+        if "alternativas" in q and not isinstance(q["alternativas"], list):
+            raise ValueError("Alternativas deve ser uma lista.")
+        if "enunciado" in q and not str(q["enunciado"]).strip():
+            raise ValueError("Enunciado não pode ser vazio.")
+
+        # Se usar variáveis/resolucoes, exigir ambos e não vazios
+        has_vars = "variaveis" in q
+        has_res = "resolucoes" in q
+        if has_vars ^ has_res:
+            raise ValueError("Quando usar variáveis/resoluções, preencha ambos (variaveis e resolucoes).")
+        if has_vars and not q["variaveis"]:
+            raise ValueError("Campo 'variaveis' não pode estar vazio quando presente.")
+        if has_res and not q["resolucoes"]:
+            raise ValueError("Campo 'resolucoes' não pode estar vazio quando presente.")
+
+        if "afirmacoes" in q and not q["afirmacoes"]:
+            raise ValueError("Campo 'afirmacoes' não pode estar vazio quando presente.")
 
         return q
 
-    def validate_question(self, q):
-        if not q.get("enunciado"):
-            raise ValueError("Enunciado não pode ser vazio.")
-        if not isinstance(q.get("alternativas"), list):
-            raise ValueError("Alternativas deve ser uma lista.")
-        if q.get("tipo") == 3:
-            if not q.get("variaveis") or not q.get("resolucoes"):
-                raise ValueError("Tipo 3: requer variaveis e resolucoes.")
-        if q.get("tipo") == 4:
-            if not q.get("afirmacoes"):
-                raise ValueError("Tipo 4: requer afirmacoes.")
-
     def _normalize_and_reorder_ids(self):
-        self.data.sort(key=lambda q: int(q.get("id", 1)))
+        self.data.sort(key=lambda x: int(x.get("id", 1)))
         for i, q in enumerate(self.data, start=1):
             q["id"] = i
 
     def save(self):
         try:
             current = self.collect_form()
-            self.validate_question(current)
         except Exception as e:
             messagebox.showerror(APP_TITLE, f"Erro de validação:\n{e}", parent=self)
             return
 
-        # reposiciona conforme ID
+        # Reposiciona conforme novo ID
         try:
             new_pos = int(current["id"]) - 1
         except Exception:
             new_pos = self.idx
 
+        # Aplica edição no item corrente
+        self.data[self.idx] = current
         item = self.data.pop(self.idx)
         self.data.insert(max(0, min(new_pos, len(self.data))), item)
         self._normalize_and_reorder_ids()
         self.idx = min(max(0, new_pos), len(self.data) - 1)
 
         try:
+            # Mantém compat: salva lista de questões
             self.json_path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
             self.var_dirty.set(False)
-            if self.on_saved:
+            if callable(self.on_saved):
                 self.on_saved()
             messagebox.showinfo(APP_TITLE, "Questão salva e JSON atualizado.", parent=self)
             self._populate_dropdown()
@@ -454,15 +478,24 @@ class QuestionEditor(tk.Toplevel):
 
     def clone_current(self):
         clone = deepcopy(self.data[self.idx])
+        try:
+            clone["id"] = int(self.data[self.idx].get("id", 0)) + 1
+        except Exception:
+            pass
         self.data.insert(self.idx + 1, clone)
         self._normalize_and_reorder_ids()
         self.idx = self.idx + 1
         self.save()
 
     def new_after_current(self):
+        new_id = 1
+        if self.data:
+            try:
+                new_id = int(self.data[self.idx].get("id", 0)) + 1
+            except Exception:
+                new_id = len(self.data) + 1
         new_q = {
-            "id": self.data[self.idx]["id"] + 1,
-            "tipo": 1,
+            "id": new_id,
             "dificuldade": "média",
             "enunciado": "",
             "imagens": [],
@@ -477,188 +510,22 @@ class QuestionEditor(tk.Toplevel):
         self.load_current()
 
     # ----------------- PREVIEW -----------------
+    def _set_preview(self, text: str):
+        self.txt_preview.configure(state="normal")
+        self.txt_preview.delete("1.0", "end")
+        self.txt_preview.insert("1.0", text or "")
+        self.txt_preview.configure(state="disabled")
+
     def update_preview(self):
-        """Gera preview; usa core (tipos 1/2/4) e fallback local para tipo 3."""
         try:
             q = self.collect_form()
         except Exception:
             q = self.data[self.idx]
 
-        # monta uma cópia do conjunto, com a questão atual atualizada
         qs = deepcopy(self.data)
         qs[self.idx] = deepcopy(q)
-
-        # divide em tipo3 e demais
-        non_t3 = []
-        only_t3 = []
-        for item in qs:
-            if int(tipo_of(item)) == 3:
-                only_t3.append(item)
-            else:
-                non_t3.append(self._normalize_for_core(item))
-
-        lines = []
-
-        # Renderização unificada via core (todos os tipos 1/2/3/4)
         try:
-            text_core = core_preview_text(qs, title="Pré-visualização")
-            lines = [text_core.strip()]
+            text_core = preview_text(qs, title="Pré-visualização")
+            self._set_preview(text_core.strip() or "(sem conteúdo)")
         except Exception as e:
-            lines = [f"[preview via core falhou]: {e}"]
-
-        # imprime
-        out = ("\n\n" + ("-" * 28) + "\n\n").join([s for s in lines if s]) or "(sem conteúdo)"
-        self.txt_preview.configure(state="normal")
-        self.txt_preview.delete("1.0", "end")
-        self.txt_preview.insert("1.0", out)
-        self.txt_preview.configure(state="disabled")
-
-    # -------- normalização para o core (tipos 1,2,4) --------
-    def _normalize_for_core(self, q):
-        """Converte do seu formato para o esperado pelo core.preview."""
-        t = int(tipo_of(q))
-        base = {"prompt": q.get("enunciado", ""), "meta": {"dificuldade": q.get("dificuldade", "")}}
-
-        if t == 1:
-            obj = {
-                **base,
-                "type": "type1",
-                "options": q.get("alternativas") or [],
-            }
-            corr = q.get("correta", "").strip()
-            if corr:
-                try:
-                    # se veio 'a','b','c'... mapeia; se veio inteiro 1..n mapeia
-                    idx = self._norm_index(corr, len(obj["options"]))
-                    obj["answer"] = idx + 1 if idx >= 0 else corr
-                except Exception:
-                    obj["answer"] = corr
-            return obj
-
-        if t == 2:
-            ans = q.get("correta", "").strip()
-            truth = None
-            if ans:
-                s = ans.lower()
-                if s in ("v", "verdadeiro", "true", "t", "sim", "s", "yes", "y", "1"):
-                    truth = True
-                elif s in ("f", "falso", "false", "n", "nao", "não", "no", "0"):
-                    truth = False
-            return {**base, "type": "type2", "answer": truth}
-
-        if t == 4:
-            if q.get("afirmacoes"):
-                return {**base, "type": "type4", "pairs": [[k, v] for k, v in q["afirmacoes"].items()]}
-            answers = []
-            if q.get("correta"):
-                answers = [q["correta"]]
-            return {**base, "type": "type4", "answers": answers}
-
-        # fallback tratá-lo como type1
-        return {**base, "type": "type1", "options": q.get("alternativas") or []}
-
-    def _norm_index(self, x, n):
-        if isinstance(x, int):
-            if 0 <= x < n:
-                return x
-            if 1 <= x <= n:
-                return x - 1
-        if isinstance(x, str) and x:
-            ch = x.strip().lower()
-            if ch.isalpha() and len(ch) == 1:
-                return ord(ch) - 97
-            if ch.isdigit():
-                k = int(ch)
-                return k - 1 if 1 <= k <= n else k
-            # tenta achar pelo texto da alternativa
-        return -1
-
-    # -------- preview local do tipo 3 (o seu formato) --------
-    def _render_local_tipo3(self, q):
-        """Renderiza tipo 3 com variáveis/resoluções e placeholders <...>."""
-        lines = []
-        first = f"{q.get('id')}) {q.get('enunciado','').strip()}"
-        lines.append(first)
-        lines.append("")
-
-        # valores "fixos" (usa mínimo como referência na prévia)
-        vals = {}
-        for name, cfg in (q.get("variaveis") or {}).items():
-            try:
-                vals[name] = float(cfg.get("min", 0))
-            except Exception:
-                vals[name] = 0.0
-
-        # derivados
-        derived = {}
-        for name, expr in (q.get("resolucoes") or {}).items():
-            expr_clean = self._expr_clean(expr, vals, {})
-            try:
-                derived[name] = self._safe_eval(expr_clean)
-            except Exception:
-                derived[name] = float("nan")
-
-        # alternativas (correta primeiro se existir)
-        alts = q.get("alternativas") or []
-        corr = q.get("correta", "")
-        ordered = []
-        if corr:
-            ordered.append(corr)
-        ordered += [a for a in alts if a != corr]
-
-        for i, a in enumerate(ordered):
-            letter = ALPH[i % len(ALPH)]
-            s = self._render_text(a, vals, derived)
-            lines.append(f"{letter}) {s}")
-
-        if q.get("obs"):
-            lines.append("")
-            lines.append("OBS.:")
-            for line in q["obs"]:
-                lines.append(line)
-
-        return "\n".join(lines)
-
-    # avaliação simples: só números + operadores seguros
-    def _safe_eval(self, expr):
-        expr = re.sub(r"[^0-9+\-*/(). ]", "", expr)
-        return eval(expr, {"__builtins__": {}}, {})
-
-    def _expr_clean(self, expr, vals, derived):
-        def replace_token(m):
-            token = m.group(1)
-            if token in vals:
-                return str(vals[token])
-            if token in derived:
-                return str(derived[token])
-            return "0"
-
-        expr2 = re.sub(r"<\s*([A-Za-z0-9_]+)\s*>", replace_token, expr)
-        expr2 = re.sub(r"[^0-9+\-*/(). ]", "", expr2)
-        return expr2
-
-    def _render_text(self, text, vals, derived):
-        def repl(m):
-            inner = m.group(1).strip()
-            m2 = re.match(r"^([A-Za-z0-9_]+)\s*([+\-*/])\s*([0-9.]+)$", inner)
-            if m2:
-                name, op, num = m2.groups()
-                base = vals.get(name, derived.get(name, 0.0))
-                try:
-                    num = float(num)
-                except Exception:
-                    num = 0.0
-                try:
-                    ex = f"{base}{op}{num}"
-                    return f"{self._safe_eval(ex):.6f}"
-                except Exception:
-                    return inner
-            base = vals.get(inner, derived.get(inner, None))
-            if base is None:
-                return inner
-            try:
-                return f"{float(base):.6f}"
-            except Exception:
-                return str(base)
-
-        return re.sub(r"<([^>]+)>", repl, text)
+            self._set_preview(f"[preview via core falhou]: {e}")

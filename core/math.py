@@ -1,9 +1,7 @@
-
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Dict, Any, Tuple, List
-import ast, re, random, math
+from typing import Dict, Any, Tuple
+import ast, re, random
 
 ANGLE_RE = re.compile(r"<([^<>]+)?>")
 
