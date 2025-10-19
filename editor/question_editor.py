@@ -127,23 +127,25 @@ class QuestionEditor(tk.Toplevel):
         # Toolbar PEDIDA dentro da aba Formulário (no topo)
         toolbar = ttk.Frame(self.tab_form, padding=(2, 6, 2, 8))
         toolbar.grid(row=0, column=0, sticky="ew")
+
+        # colunas: 0=Inserir, 1=Excluir, 2=Label "Campo:", 3=Combobox (expande)
         toolbar.columnconfigure(0, weight=0)
-        toolbar.columnconfigure(1, weight=1)
+        toolbar.columnconfigure(1, weight=0)
         toolbar.columnconfigure(2, weight=0)
-        toolbar.columnconfigure(3, weight=0)
+        toolbar.columnconfigure(3, weight=1)  # combo deve expandir
 
-        # Combobox para escolher o campo a excluir
-        ttk.Label(toolbar, text="Campo:").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.cmb_field = ttk.Combobox(toolbar, state="readonly", width=28)
-        self.cmb_field.grid(row=0, column=1, sticky="w")
-
-        # Botões (criar SEM encadear .grid/.pack)
+        # Botões primeiro
         self.btn_field_insert = ttk.Button(toolbar, text="Inserir", command=self._insert_field_menu)
-        self.btn_field_insert.grid(row=0, column=2, padx=(12, 6))
+        self.btn_field_insert.grid(row=0, column=0, padx=(0, 6))
 
         self.btn_field_delete = ttk.Button(toolbar, text="Excluir", command=self._remove_field_selected)
-        self.btn_field_delete.grid(row=0, column=3)
+        self.btn_field_delete.grid(row=0, column=1, padx=(0, 12))
         self.btn_field_delete.state(["disabled"])
+
+        # Depois o "Campo:" + combobox
+        ttk.Label(toolbar, text="Campo:").grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.cmb_field = ttk.Combobox(toolbar, state="readonly", width=28)
+        self.cmb_field.grid(row=0, column=3, sticky="ew")
 
 
         # Container com canvas + scrollbar (formulário)
