@@ -91,18 +91,28 @@ jobs:
         run: |
           $name = "${{ env.APP_NAME }}"
           $entry = "${{ env.ENTRYPOINT }}"
+
+          # Monta parâmetros --add-data para cada pasta listada em ADD_DATA_DIRS
           $datas = @()
           "${{ env.ADD_DATA_DIRS }}".Split("`n") | ForEach-Object {
             $line = $_.Trim()
-            if ($line) { $datas += "--add-data `"$line`"" }
+            if ($line) {
+              # Formato Windows do PyInstaller: SRC;DEST
+              $datas += "--add-data `"$line`""
+            }
           }
+
+          # IMPORTANTE:
+          # Removi '--hidden-import lxml._elementpath' porque essa submodule não existe
+          # em versões novas do lxml, e isso estava causando falha imediata.
           $hidden = @(
-            "--hidden-import lxml._elementpath",
             "--hidden-import docx.opc.constants",
             "--hidden-import docx.oxml",
             "--hidden-import docx.oxml.ns",
             "--hidden-import docx.oxml.parser"
           )
+
+          # Se o LearnForge NÃO for GUI e precisar de console, remova --windowed
           pyinstaller --noconfirm --clean `
             --name "$name" `
             --onefile `
@@ -111,7 +121,7 @@ jobs:
             $datas `
             "$entry"
 
-      # ---------- Tectonic (LaTeX engine portátil) ----------
+      # ---------- Tectonic (engine LaTeX portátil) ----------
       - name: Install Chocolatey (for Tectonic)
         shell: pwsh
         run: |
