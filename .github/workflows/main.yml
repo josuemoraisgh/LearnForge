@@ -92,34 +92,62 @@ jobs:
           $name = "${{ env.APP_NAME }}"
           $entry = "${{ env.ENTRYPOINT }}"
 
-          # Monta parâmetros --add-data para cada pasta listada em ADD_DATA_DIRS
-          $datas = @()
+          #
+          # Monta lista de --add-data no formato que o PyInstaller aceita.
+          # Exemplo final: --add-data assets;assets --add-data core;core ...
+          #
+          $datasArgs = @()
           "${{ env.ADD_DATA_DIRS }}".Split("`n") | ForEach-Object {
             $line = $_.Trim()
             if ($line) {
-              # Formato Windows do PyInstaller: SRC;DEST
-              $datas += "--add-data `"$line`""
+              $datasArgs += @("--add-data", $line)
             }
           }
 
-          # IMPORTANTE:
-          # Removi '--hidden-import lxml._elementpath' porque essa submodule não existe
-          # em versões novas do lxml, e isso estava causando falha imediata.
-          $hidden = @(
-            "--hidden-import docx.opc.constants",
-            "--hidden-import docx.oxml",
-            "--hidden-import docx.oxml.ns",
-            "--hidden-import docx.oxml.parser"
+          #
+          # Monta lista de --hidden-import corretamente (cada flag e cada módulo são itens separados).
+          # Removido lxml._elementpath porque não existe mais nas versões novas.
+          #
+          $hiddenArgs = @(
+            "--hidden-import", "docx.opc.constants",
+            "--hidden-import", "docx.oxml",
+            "--hidden-import", "docx.oxml.ns",
+            "--hidden-import", "docx.oxml.parser"
           )
 
-          # Se o LearnForge NÃO for GUI e precisar de console, remova --windowed
-          pyinstaller --noconfirm --clean `
-            --name "$name" `
-            --onefile `
-            --windowed `
-            $hidden `
-            $datas `
-            "$entry"
+          #
+          # Agora juntamos todos os argumentos em uma única chamada.
+          # Importante: em PowerShell, chamar & pyinstaller @args garante
+          # que cada item do array vira um argumento separado.
+          #
+          $baseArgs = @(
+            "--noconfirm",
+            "--clean",
+            "--name", $name,
+            "--onefile",
+            "--windowed",      # mantenha, seu app é GUI
+            $entry
+          )
+
+          # A ordem precisa ser: flags globais -> hidden-import -> add-data -> entrypoint
+          $allArgs = @()
+          $allArgs += "--noconfirm"
+          $allArgs += "--clean"
+          $allArgs += "--name";      $allArgs += $name
+          $allArgs += "--onefile"
+          $allArgs += "--windowed"
+
+          # acrescenta os hidden-import
+          $allArgs += $hiddenArgs
+
+          # acrescenta os add-data
+          $allArgs += $datasArgs
+
+          # por último o entrypoint
+          $allArgs += $entry
+
+          # chama pyinstaller com splat correto
+          & pyinstaller @allArgs
 
       # ---------- Tectonic (engine LaTeX portátil) ----------
       - name: Install Chocolatey (for Tectonic)
