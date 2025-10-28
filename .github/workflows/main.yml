@@ -93,19 +93,21 @@ jobs:
           $entry = "${{ env.ENTRYPOINT }}"
 
           #
-          # Corrige separador de diretórios: substitui ';' por ':' (novo padrão PyInstaller)
+          # Monta lista de --add-data no formato novo exigido:
+          # --add-data=SRC:DEST
           #
           $datasArgs = @()
           "${{ env.ADD_DATA_DIRS }}".Split("`n") | ForEach-Object {
             $line = $_.Trim()
             if ($line) {
+              # troca ; por : (PyInstaller >=6 usa : em qualquer SO)
               $fixed = $line -replace ';', ':'
-              $datasArgs += @("--add-data", $fixed)
+              $datasArgs += "--add-data=$fixed"
             }
           }
 
           #
-          # Hidden imports (sem o lxml._elementpath, que não existe mais)
+          # Hidden imports necessários para python-docx
           #
           $hiddenArgs = @(
             "--hidden-import", "docx.opc.constants",
@@ -115,14 +117,16 @@ jobs:
           )
 
           #
-          # Monta todos os argumentos corretamente (cada flag é um item separado)
+          # Monta todos os argumentos. Agora:
+          # - $hiddenArgs ainda é em pares (--hidden-import X)
+          # - $datasArgs agora já vem 1 por item, estilo --add-data=SRC:DEST
           #
           $allArgs = @()
           $allArgs += "--noconfirm"
           $allArgs += "--clean"
           $allArgs += "--name";      $allArgs += $name
           $allArgs += "--onefile"
-          $allArgs += "--windowed"  # GUI: mantém janela sem console
+          $allArgs += "--windowed"   # GUI
           $allArgs += $hiddenArgs
           $allArgs += $datasArgs
           $allArgs += $entry
@@ -152,6 +156,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path bundle | Out-Null
           Copy-Item -Path (Join-Path "${{ env.DIST_DIR }}" "${{ env.APP_NAME }}.exe") -Destination bundle/
+
+          # cria pasta tex e copia tectonic.exe
           New-Item -ItemType Directory -Force -Path (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}') | Out-Null
           Copy-Item -Path "${{ env.TECTONIC_BIN }}" -Destination (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}')
 
