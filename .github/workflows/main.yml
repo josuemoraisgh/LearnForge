@@ -93,20 +93,19 @@ jobs:
           $entry = "${{ env.ENTRYPOINT }}"
 
           #
-          # Monta lista de --add-data no formato que o PyInstaller aceita.
-          # Exemplo final: --add-data assets;assets --add-data core;core ...
+          # Corrige separador de diretórios: substitui ';' por ':' (novo padrão PyInstaller)
           #
           $datasArgs = @()
           "${{ env.ADD_DATA_DIRS }}".Split("`n") | ForEach-Object {
             $line = $_.Trim()
             if ($line) {
-              $datasArgs += @("--add-data", $line)
+              $fixed = $line -replace ';', ':'
+              $datasArgs += @("--add-data", $fixed)
             }
           }
 
           #
-          # Monta lista de --hidden-import corretamente (cada flag e cada módulo são itens separados).
-          # Removido lxml._elementpath porque não existe mais nas versões novas.
+          # Hidden imports (sem o lxml._elementpath, que não existe mais)
           #
           $hiddenArgs = @(
             "--hidden-import", "docx.opc.constants",
@@ -116,37 +115,20 @@ jobs:
           )
 
           #
-          # Agora juntamos todos os argumentos em uma única chamada.
-          # Importante: em PowerShell, chamar & pyinstaller @args garante
-          # que cada item do array vira um argumento separado.
+          # Monta todos os argumentos corretamente (cada flag é um item separado)
           #
-          $baseArgs = @(
-            "--noconfirm",
-            "--clean",
-            "--name", $name,
-            "--onefile",
-            "--windowed",      # mantenha, seu app é GUI
-            $entry
-          )
-
-          # A ordem precisa ser: flags globais -> hidden-import -> add-data -> entrypoint
           $allArgs = @()
           $allArgs += "--noconfirm"
           $allArgs += "--clean"
           $allArgs += "--name";      $allArgs += $name
           $allArgs += "--onefile"
-          $allArgs += "--windowed"
-
-          # acrescenta os hidden-import
+          $allArgs += "--windowed"  # GUI: mantém janela sem console
           $allArgs += $hiddenArgs
-
-          # acrescenta os add-data
           $allArgs += $datasArgs
-
-          # por último o entrypoint
           $allArgs += $entry
 
-          # chama pyinstaller com splat correto
+          Write-Host "Executando PyInstaller com os seguintes argumentos:"
+          Write-Host ($allArgs -join ' ')
           & pyinstaller @allArgs
 
       # ---------- Tectonic (engine LaTeX portátil) ----------
@@ -170,8 +152,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path bundle | Out-Null
           Copy-Item -Path (Join-Path "${{ env.DIST_DIR }}" "${{ env.APP_NAME }}.exe") -Destination bundle/
-
-          # Copia tectonic.exe para bundle/tex/
           New-Item -ItemType Directory -Force -Path (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}') | Out-Null
           Copy-Item -Path "${{ env.TECTONIC_BIN }}" -Destination (Join-Path 'bundle' '${{ env.TEX_OUTDIR }}')
 
