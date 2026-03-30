@@ -436,7 +436,27 @@ def json2beamer(
         parts.append("}")
         parts.append("\\end{frame}\n")
 
-        # ---------------- Frame 2: com gabarito ----------------
+        # ---------------- Frame 2: OBS (se houver) ----------------
+        obs = q_res.get("obs")
+        obs_items = []
+        if isinstance(obs, str) and obs.strip():
+            obs_items = [obs.strip()]
+        elif isinstance(obs, (list, tuple)):
+            obs_items = [str(x).strip() for x in obs if str(x).strip()]
+
+        if obs_items:
+            parts.append("\\begin{frame}")
+            parts.append(f"\\frametitle{{{qid}) {enun_tex}}}")
+            parts.append("{\\BodySize")
+            parts.append("\\textbf{OBS.:}")
+            parts.append("\\begin{itemize}")
+            for it in obs_items:
+                parts.append("\\item " + latex_escape(it))
+            parts.append("\\end{itemize}")
+            parts.append("}")
+            parts.append("\\end{frame}\n")
+            
+        # ---------------- Frame 3: com gabarito ----------------
         parts.append("\\begin{frame}")
         parts.append(f"\\frametitle{{{qid}) {enun_tex}}}")
         parts.append("{\\BodySize")
@@ -473,27 +493,7 @@ def json2beamer(
             parts.append(grid if grid else render_alts_text(alts, correta_index, highlight=True))
 
         parts.append("}")
-        parts.append("\\end{frame}\n")
-
-        # ---------------- Frame 3: OBS (se houver) ----------------
-        obs = q_res.get("obs")
-        obs_items = []
-        if isinstance(obs, str) and obs.strip():
-            obs_items = [obs.strip()]
-        elif isinstance(obs, (list, tuple)):
-            obs_items = [str(x).strip() for x in obs if str(x).strip()]
-
-        if obs_items:
-            parts.append("\\begin{frame}")
-            parts.append(f"\\frametitle{{{qid}) {enun_tex}}}")
-            parts.append("{\\BodySize")
-            parts.append("\\textbf{OBS.:}")
-            parts.append("\\begin{itemize}")
-            for it in obs_items:
-                parts.append("\\item " + latex_escape(it))
-            parts.append("\\end{itemize}")
-            parts.append("}")
-            parts.append("\\end{frame}\n")
+        parts.append("\\end{frame}\n")       
 
     parts.append("\\end{document}\n")
 
